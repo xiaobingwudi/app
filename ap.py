@@ -94,20 +94,21 @@ button[kind="primary"]{
 """, unsafe_allow_html=True)
 
 # =========================================================
-# API
+# API 配置 - 安全版
 # =========================================================
+# 1. 从 st.secrets 中安全地读取 API Key
+# 这里的 "OPENAI_API_KEY" 是你在 Streamlit 后台设置的变量名
+api_key = st.secrets["OPENAI_API_KEY"]
 
-API_KEY = "你的API_KEY"
+# 2. 其他配置可以保持不变，或者也用 secrets 管理
+BASE_URL = "https://api.videocaptioner.cn/v1"
+MODEL_NAME = "gpt-5.4-nano"
 
-BASE_URL = "https://你的中转地址/v1"
-
-MODEL_NAME = "gpt-5-mini"
-
+# 3. 将读取到的 api_key 传给 OpenAI 客户端
 client = OpenAI(
-    api_key=API_KEY,
+    api_key=api_key,
     base_url=BASE_URL
 )
-
 # =========================================================
 # 数据目录
 # =========================================================
