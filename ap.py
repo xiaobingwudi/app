@@ -1,113 +1,26 @@
+# =====================================================
+# Al Brooks 五层逐K训练系统（优化版）
+# 目标：训练“控制权阅读”而非预测
+# =====================================================
+
 import json
 import random
-from pathlib import Path
 import pandas as pd
-import plotly.graph_objects as go
+import numpy as np
 import streamlit as st
+import plotly.graph_objects as go
 from openai import OpenAI
 
-# =========================================================
-# 1. 页面配置 (专业交易暗黑风)
-# =========================================================
+# =====================================================
+# 页面配置
+# =====================================================
+
 st.set_page_config(
-    page_title="Al Brooks 市场感知训练系统",
-    layout="wide",
-    initial_sidebar_state="collapsed"
+    page_title="Al Brooks 五层训练系统",
+    layout="wide"
 )
 
-# =========================================================
-# 2. CSS 美化样式
-# =========================================================
-st.markdown("""
-<style>
-/* 全局背景与字体 */
-html, body, [class*="css"] {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    background-color: #0e1117;
-}
-#MainMenu {visibility: hidden;}
-footer {visibility: hidden;}
-
-/* 容器优化 */
-.block-container {
-    padding-top: 1rem;
-    padding-bottom: 2rem;
-    max-width: 1400px;
-    margin: 0 auto;
-}
-
-/* 标题美化 */
-h1 {
-    font-size: 32px !important;
-    font-weight: 700;
-    color: #ffffff;
-    text-align: center;
-    margin-bottom: 1rem;
-    letter-spacing: 1px;
-}
-h3 {
-    color: #aebac9;
-    border-left: 4px solid #00c3ff;
-    padding-left: 12px;
-    margin-top: 1.5rem;
-}
-
-/* 指标卡片 (Metrics) */
-div[data-testid="stMetric"] {
-    background-color: #161b22;
-    border: 1px solid #30363d;
-    border-radius: 8px;
-    padding: 10px;
-}
-div[data-testid="stMetricValue"] {
-    font-size: 1.2rem !important;
-    color: #58a6ff;
-}
-div[data-testid="stMetricLabel"] {
-    font-size: 0.8rem !important;
-    color: #8b949e;
-}
-
-/* 控件美化 */
-.stSelectbox > div > div, .stRadio > div {
-    background-color: #21262d !important;
-    border: 1px solid #30363d !important;
-    color: #c9d1d9 !important;
-}
-.stButton>button {
-    width: 100%;
-    border-radius: 6px;
-    border: 1px solid #238636;
-    background-color: #238636;
-    color: white;
-    font-weight: 600;
-    transition: all 0.2s;
-}
-.stButton>button:hover {
-    background-color: #2ea043;
-    box-shadow: 0 0 10px rgba(46, 160, 67, 0.4);
-}
-
-/* 文本域 */
-.stTextArea textarea {
-    background-color: #0d1117 !important;
-    border: 1px solid #30363d !important;
-    color: #c9d1d9 !important;
-}
-
-/* 输入框 */
-.stTextInput > div > div > input {
-    background-color: #21262d !important;
-    border: 1px solid #30363d !important;
-    color: #c9d1d9 !important;
-}
-</style>
-""", unsafe_allow_html=True)
-
-st.title("📊 Al Brooks 市场感知训练系统")
-st.markdown("---")
-
-# =========================================================
+# =====================================================
 
 # API 配置 - 安全版
 # =========================================================
@@ -124,257 +37,415 @@ client = OpenAI(
     api_key=api_key,
     base_url=BASE_URL
 )
-# =========================================================
-# 4. 数据加载与初始化
-# =========================================================
-DATA_DIR = Path("data")
-if not DATA_DIR.exists():
-    st.error("未找到 data 文件夹，请在同级目录下创建 data 文件夹并放入 CSV 文件。")
-    st.stop()
 
-csv_files = list(DATA_DIR.glob("*.csv"))
-if len(csv_files) == 0:
-    st.error("data 文件夹中没有 CSV 文件。")
-    st.stop()
+# =====================================================
+# CSS 小屏优化
+# =====================================================
 
-# Session State 初始化
-if "selected_file" not in st.session_state:
-    st.session_state.selected_file = random.choice(csv_files)
+st.markdown("""
+<style>
+
+html, body, [class*="css"] {
+    font-size: 12px !important;
+}
+
+.block-container {
+    padding-top: 0.3rem;
+    padding-bottom: 0.3rem;
+    max-width: 100%;
+}
+
+h1 {
+    font-size: 20px !important;
+    margin-bottom: 0.3rem !important;
+}
+
+h2,h3 {
+    font-size: 15px !important;
+}
+
+textarea {
+    font-size: 12px !important;
+    line-height: 1.4 !important;
+}
+
+.stButton button {
+    height: 32px;
+    font-size: 12px;
+    border-radius: 6px;
+}
+
+.stSelectbox label,
+.stTextArea label {
+    font-size: 11px !important;
+}
+
+.custom-box {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 10px;
+    margin-bottom: 10px;
+}
+
+.small-tip {
+    font-size: 11px;
+    color: #6b7280;
+    line-height: 1.4;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+
+# =====================================================
+# 数据生成
+# =====================================================
+
+
+def generate_mock_data(num_bars=300):
+    np.random.seed(random.randint(1, 999999))
+    data = []
+    price = 100
+    trend = 0
+    for i in range(num_bars):
+        if i % 40 == 0:
+            trend = random.choice([1.2, -1.2, 0.2, -0.2, 0.0])
+        noise = np.random.normal(0, 1.2)
+        change = trend + noise
+        open_price = price
+        close_price = price + change
+        high_price = max(open_price, close_price) + abs(np.random.normal(0, 0.5))
+        low_price = min(open_price, close_price) - abs(np.random.normal(0, 0.5))
+        data.append({
+            "Open": round(open_price, 2),
+            "High": round(high_price, 2),
+            "Low": round(low_price, 2),
+            "Close": round(close_price, 2)
+        })
+        price = close_price
+    return pd.DataFrame(data)
+
+
+# =====================================================
+# Session
+# =====================================================
+
+if "df" not in st.session_state:
+    st.session_state.df = generate_mock_data()
+
+if "current_idx" not in st.session_state:
+    st.session_state.current_idx = 120
+
 if "logs" not in st.session_state:
     st.session_state.logs = []
-if "random_start" not in st.session_state:
-    st.session_state.random_start = random.randint(100, 500)
-if "current_index" not in st.session_state:
-    st.session_state.current_index = st.session_state.random_start
 
-# 加载数据
-file_path = st.session_state.selected_file
-df = pd.read_csv(file_path)
-required_columns = ["Open", "High", "Low", "Close"]
-for col in required_columns:
-    if col not in df.columns:
-        st.error(f"CSV 缺少必要字段: {col}")
-        st.stop()
+# =====================================================
+# 数据,背景默认为60跟K线
+# =====================================================
 
-df = df.reset_index(drop=True)
-current_index = st.session_state.current_index
+df = st.session_state.df
+current_idx = st.session_state.current_idx
+WINDOW = 60
+start = max(0, current_idx - WINDOW)
+chart_df = df.iloc[start:current_idx + 1].copy()
+chart_df["index"] = range(len(chart_df))
 
-# =========================================================
-# 5. 数据切片与特征计算
-# =========================================================
-WINDOW_SIZE = 80
-start_index = max(0, current_index - WINDOW_SIZE)
-visible_df = df.iloc[start_index:current_index]
 
-# 当前 K 线数据
-if len(visible_df) == 0:
-    st.error("数据不足，请重新加载。")
-    st.stop()
+# =====================================================
+# Swing 识别
+# =====================================================
 
-current_bar = visible_df.iloc[-1]
-current_open = float(current_bar["Open"])
-current_high = float(current_bar["High"])
-current_low = float(current_bar["Low"])
-current_close = float(current_bar["Close"])
+def detect_swings(data):
+    swings = []
+    highs = data["High"].tolist()
+    lows = data["Low"].tolist()
+    for i in range(2, len(data) - 2):
+        if (highs[i] > highs[i - 1] and highs[i] > highs[i - 2] and
+                highs[i] > highs[i + 1] and highs[i] > highs[i + 2]):
+            swings.append({"index": i, "type": "SH", "price": highs[i]})
+        if (lows[i] < lows[i - 1] and lows[i] < lows[i - 2] and
+                lows[i] < lows[i + 1] and lows[i] < lows[i + 2]):
+            swings.append({"index": i, "type": "SL", "price": lows[i]})
+    return swings
 
-# =========================================================
-# 6. 顶部控制栏
-# =========================================================
-col_nav1, col_nav2, col_nav3 = st.columns([1, 1, 2])
-with col_nav1:
-    if st.button("🎲 随机新图表"):
-        st.session_state.selected_file = random.choice(csv_files)
-        st.session_state.random_start = random.randint(100, len(df) - 50)
-        st.session_state.current_index = st.session_state.random_start
-        st.session_state.logs = []
+
+swings = detect_swings(chart_df)
+
+
+# =====================================================
+# 市场结构识别
+# =====================================================
+
+def detect_structure(swings):
+    highs = [x for x in swings if x["type"] == "SH"]
+    lows = [x for x in swings if x["type"] == "SL"]
+    if len(highs) < 2 or len(lows) < 2:
+        return "区间"
+    hh = highs[-1]["price"] > highs[-2]["price"]
+    hl = lows[-1]["price"] > lows[-2]["price"]
+    ll = lows[-1]["price"] < lows[-2]["price"]
+    lh = highs[-1]["price"] < highs[-2]["price"]
+    if hh and hl:
+        return "HH/HL"
+    if ll and lh:
+        return "LL/LH"
+    return "区间"
+
+
+market_structure = detect_structure(swings)
+
+
+# =====================================================
+# 推进质量
+# =====================================================
+
+def momentum_analysis(data):
+    recent = data.tail(15)
+    total_move = abs(recent.iloc[-1]["Close"] - recent.iloc[0]["Close"])
+    total_range = (recent["High"].max() - recent["Low"].min())
+    efficiency = 0
+    if total_range > 0:
+        efficiency = total_move / total_range
+    bull_close = 0
+    bear_close = 0
+    for _, row in recent.iterrows():
+        body = abs(row["Close"] - row["Open"])
+        range_size = row["High"] - row["Low"]
+        if range_size == 0:
+            continue
+        close_position = (row["Close"] - row["Low"]) / range_size
+        if row["Close"] > row["Open"] and close_position > 0.7:
+            bull_close += 1
+        if row["Close"] < row["Open"] and close_position < 0.3:
+            bear_close += 1
+    if efficiency > 0.7:
+        state = "强推进"
+    elif efficiency > 0.5:
+        state = "健康推进"
+    elif efficiency > 0.3:
+        state = "推进困难"
+    else:
+        state = "混乱/区间"
+    return {
+        "efficiency": round(efficiency, 2),
+        "state": state,
+        "bull_close": bull_close,
+        "bear_close": bear_close
+    }
+
+
+momentum = momentum_analysis(chart_df)
+
+# =====================================================
+# 顶部栏
+# =====================================================
+
+st.title("Al Brooks 五层控制权训练")
+
+c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
+
+with c1:
+    if st.button("随机新走势"):
+        st.session_state.df = generate_mock_data()
+        st.session_state.current_idx = 120
         st.rerun()
 
-with col_nav2:
-    if st.button("⏭️ 下一根 K 线"):
-        if current_index < len(df):
-            st.session_state.current_index += 1
+with c2:
+    if st.button("上一根"):
+        if st.session_state.current_idx > 30:
+            st.session_state.current_idx -= 1
             st.rerun()
 
-with col_nav3:
-    st.markdown(f"**文件:** `{file_path.name}`  |  **进度:** {current_index} / {len(df)}")
+with c3:
+    if st.button("下一根"):
+        if st.session_state.current_idx < len(df) - 2:
+            st.session_state.current_idx += 1
+            st.rerun()
 
-# =========================================================
-# 7. K 线图绘制 (Plotly 暗黑风)
-# =========================================================
+with c4:
+    st.caption(f"当前位置：{current_idx}/{len(df)}")
+
+# =====================================================
+# A区域：图表区（正常布局，不加容器限制）
+# =====================================================
+
+# 绘制K线图
 fig = go.Figure()
-fig.add_trace(go.Candlestick(
-    x=list(range(len(visible_df))),
-    open=visible_df["Open"],
-    high=visible_df["High"],
-    low=visible_df["Low"],
-    close=visible_df["Close"],
-    name="K线",
-    increasing_line_color='#26a69a',
-    decreasing_line_color='#ef5350',
-    hoverinfo='none'
-))
+
+fig.add_trace(
+    go.Candlestick(
+        x=chart_df["index"],
+        open=chart_df["Open"],
+        high=chart_df["High"],
+        low=chart_df["Low"],
+        close=chart_df["Close"]
+    )
+)
+# 新增：为每根K线标上序号
+for i in range(len(chart_df)):
+    fig.add_annotation(
+        x=i,
+        y=chart_df["High"].iloc[i],  # 标注在每根K线的最高价上方
+        text=str(i),                 # 显示当前K线的序号
+        showarrow=False,             # 不显示箭头
+        font=dict(size=9, color="gray"), # 字体大小和颜色
+        yshift=5                     # 稍微向上偏移5个像素，防止遮挡K线
+    )
+# 网格线
+# for x in range(0, len(chart_df), 5):
+#     fig.add_vline(x=x, line_dash="dot", opacity=0.15)
+#
+# max_price = chart_df["High"].max()
+# min_price = chart_df["Low"].min()
+# step = (max_price - min_price) * 0.01
+# current = min_price
+# while current <= max_price:
+#     fig.add_hline(y=current, line_dash="dot", opacity=0.12)
+#     current += step
+
+# Swing 标记
+for s in swings[-15:]:
+    fig.add_annotation(
+        x=s["index"],
+        y=s["price"],
+        text=s["type"],
+        showarrow=True,
+        font=dict(size=9)
+    )
 
 fig.update_layout(
-    height=500,
+    height=400,
+    margin=dict(l=0, r=0, t=0, b=0),
     xaxis_rangeslider_visible=False,
-    margin=dict(l=20, r=20, t=20, b=20),
-    paper_bgcolor='#0e1117',
-    plot_bgcolor='#161b22',
-    xaxis=dict(showgrid=False, showticklabels=False),
-    yaxis=dict(gridcolor='#30363d', color='#8b949e'),
-    showlegend=False
+    dragmode="pan"
 )
+
+fig.update_xaxes(showgrid=False)
+fig.update_yaxes(showgrid=False)
+
 st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-# =========================================================
-# 8. 用户感知训练 (核心交互区 - 填空题形式)
-# =========================================================
-st.markdown("### 🧠 你的市场感知 (Market Reading)")
-st.caption("请基于图表背景进行判断，不要只看最后一根 K 线。请用文字详细描述你的观察和分析。")
+# =====================================================
+# B区域：表单区（放入固定高度容器，独立滚动）
+# =====================================================
 
-# 多空主导权判断
-st.markdown("**1. 多空主导权分析**")
-user_control = st.text_area(
-    "谁掌握主动权？请详细描述你的观察依据（例如：多头主导、空头主导、势均力敌）",
-    placeholder="请描述：当前市场是由多头、空头主导，还是势均力敌？你的判断依据是什么？",
-    height=100
-)
+st.subheader("✍️ 五层强制思考工作表")
 
-# 市场结构判断
-st.markdown("**2. 市场结构分析**")
-user_structure = st.text_area(
-    "当前处于什么市场结构？请详细描述你的观察依据",
-    placeholder="请描述：当前市场处于上升趋势、下降趋势、交易区间，还是突破/反转阶段？你的判断依据是什么？",
-    height=100
-)
+# 核心：使用容器包裹表单，实现独立滚动
+with st.container(height=400, border=True):
+    # 表单内容
+    with st.form("perception_form"):
+        # 第一层
+        st.markdown("### 第一层｜背景")
+        st.markdown("<div class='small-tip'>先看背景，再看单根K线</div>", unsafe_allow_html=True)
+        layer1 = st.text_area("市场背景", placeholder="现在是HH/HL？LL/LH？还是区间？谁控制市场？", height=70, key="l1")
 
-# 关键价位识别
-st.markdown("**3. 关键价位识别**")
-user_key_levels = st.text_input(
-    "你认为当前最关键的多空分界价位是多少？",
-    placeholder="请填写一个具体的价格数值"
-)
+        # 第二层
+        st.markdown("### 第二层｜当前K线")
+        layer2 = st.text_area("当前K线含义", placeholder="当前K线是否改变控制权？", height=70, key="l2")
 
-# 推动力量评估
-st.markdown("**4. 推动力量评估**")
-user_momentum = st.text_area(
-    "当前的推动力量如何？请详细描述你的观察依据",
-    placeholder="请描述：当前市场的推动力量是强、中等、弱？你的判断依据是什么？",
-    height=100
-)
+        # 第三层
+        st.markdown("### 第三层｜推进质量")
+        layer3 = st.text_area("推进/回调质量", placeholder="推进轻松吗？回调深吗？恢复快吗？", height=70, key="l3")
 
-# 综合观察笔记
-st.markdown("**5. 综合观察笔记**")
-user_notes = st.text_area(
-    "📝 综合观察笔记 (支持 Markdown)",
-    value="请详细描述你对当前市场状态的完整分析，包括：\n- 市场背景与结构\n- 多空力量对比\n- 关键价位\n- 你的分析逻辑",
-    height=150
-)
+        # 第四层
+        st.markdown("### 第四层｜转换检查")
+        layer4 = st.text_area("是否真正转换", placeholder="结构是否真正被破坏？对手是否真正接管？", height=70, key="l4")
+
+        # 第五层
+        st.markdown("### 第五层｜最终校验")
+        control = st.selectbox("控制权", ["原趋势继续控制", "控制权争夺", "新方向接管"], key="l5c")
+        action = st.selectbox("倾向", ["顺势", "观望", "逆势试探"], key="l5a")
+
+        submit = st.form_submit_button("AI批改", use_container_width=True)
 
 
-# =========================================================
-# 10. AI 分析与反馈 (Context-Aware)
-# =========================================================
-def analyze_with_gpt(candles_data, user_input):
+# =====================================================
+# AI 分析
+# =====================================================
+
+def build_market_context(data):
+    recent = data.tail(15)
+    desc = ""
+    for i, row in recent.iterrows():
+        direction = "阳线" if row["Close"] >= row["Open"] else "阴线"
+        body = abs(row["Close"] - row["Open"])
+        upper = row["High"] - max(row["Open"], row["Close"])
+        lower = min(row["Open"], row["Close"]) - row["Low"]
+        desc += f"K线{i}:{direction} O:{row['Open']} H:{row['High']} L:{row['Low']} C:{row['Close']} 实体:{round(body, 2)} 上影:{round(upper, 2)} 下影:{round(lower, 2)}\n"
+    return desc
+
+
+def get_ai_analysis():
+    market_desc = build_market_context(df.iloc[:current_idx + 1])
     system_prompt = """
-    你是一位极度严谨的 Al Brooks 价格行为交易导师。请基于当前的K线图表，严格评估学生对"市场状态、多空主导权、结构完整性"的感知是否准确。
-
-    【核心原则】
-    1. 严禁预测：绝对不要根据未来的K线走势来倒推学生的对错，只基于当前可见的历史形态进行评判。
-    2. 严格标准：请用 Al Brooks 的专业视角（如趋势强度、信号K线质量、高低点排列等）来审视学生的判断。如果学生忽略了明显的长影线、K线重叠或大实体推进等关键细节，请给予严厉且专业的指正。
-
-    请以 JSON 格式返回：
-    {
-        "score": 0-100的整数,
-        "market_read_correction": "你对当前市场状态的修正与专业解读",
-        "coach_feedback": "具体的导师点评，指出其思维盲区",
-        "focus_next": "下一根K线需要重点观察的关键价位"
-    }
+    你是一位极度严格的 Al Brooks 价格行为导师。
+    你的任务：不是预测市场。而是检查学生是否真正按照：
+    1. 背景 2. 当前K线 3. 推进质量 4. 是否真正转换 5. 最终控制权 这个顺序思考。
+    重点：严禁把推进困难直接等于反转，严禁单根K线决定趋势，严禁忽略背景结构。
+    请返回JSON：{"score": 0-100, "summary": "...", "layer_review": "...", "thinking_error": "...", "next_focus": "..."}
     """
-
     user_prompt = f"""
-    市场数据（最近 80 根 K 线，包含 Open, High, Low, Close）：
-    {json.dumps(candles_data, indent=2)}
-
-    学生的判断：
-    - 多空主导权: {user_input['control']}
-    - 市场结构: {user_input['structure']}
-    - 关键价位: {user_input['key_levels']}
-    - 推动力量: {user_input['momentum']}
-    - 综合笔记: {user_input['notes']}
-
-    请基于这 80 根 K 线的大背景，评估学生的判断。
+    最近15根K线：
+    {market_desc}
+    学生五层分析：
+    第一层：{layer1}
+    第二层：{layer2}
+    第三层：{layer3}
+    第四层：{layer4}
+    第五层：控制权[{control}] 倾向[{action}]
+    请严格批改。
     """
-
     response = client.chat.completions.create(
         model=MODEL_NAME,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ],
-        temperature=0.2,
+        messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
         response_format={"type": "json_object"}
     )
     return json.loads(response.choices[0].message.content)
 
 
-# =========================================================
-# 11. 执行分析
-# =========================================================
-if st.button("🔍 提交判断并获取 AI 导师反馈", type="primary"):
-    with st.spinner("AI 正在结合大背景分析你的感知..."):
-        # 准备数据
-        context_candles = []
-        for _, row in visible_df.iterrows():
-            context_candles.append({
-                "o": round(row["Open"], 2),
-                "h": round(row["High"], 2),
-                "l": round(row["Low"], 2),
-                "c": round(row["Close"], 2)
-            })
+# =====================================================
+# 提交分析
+# =====================================================
 
-        user_input = {
-            "control": user_control,
-            "structure": user_structure,
-            "key_levels": user_key_levels,
-            "momentum": user_momentum,
-            "notes": user_notes
-        }
+if submit:
+    if not layer1 or not layer2 or not layer3 or not layer4:
+        st.error("请完成五层分析")
+    else:
+        with st.spinner("AI导师正在审查你的思维链..."):
+            try:
+                result = get_ai_analysis()
+                st.markdown("---")
+                st.subheader("AI 导师批改")
+                score = result["score"]
+                if score >= 80:
+                    st.success(f"评分：{score}")
+                elif score >= 60:
+                    st.warning(f"评分：{score}")
+                else:
+                    st.error(f"评分：{score}")
+                st.info(result["summary"])
+                st.warning(result["layer_review"])
+                st.error(result["thinking_error"])
+                st.success(result["next_focus"])
+                st.session_state.logs.append({
+                    "score": score,
+                    "structure": market_structure,
+                    "momentum": momentum["state"]
+                })
+            except Exception as e:
+                st.error(str(e))
 
-        try:
-            ai_result = analyze_with_gpt(context_candles, user_input)
+# =====================================================
+# 底部训练提醒
+# =====================================================
 
-            # 展示结果
-            st.markdown("---")
-            st.markdown("### 🏆 导师评估报告")
-
-            res_col1, res_col2 = st.columns([1, 3])
-            with res_col1:
-                score = ai_result.get("score", 0)
-                st.metric("感知准确度评分", score)
-
-            with res_col2:
-                st.info(f"**市场背景修正：** {ai_result.get('market_read_correction')}")
-
-            st.markdown(f"**💬 导师点评：** {ai_result.get('coach_feedback')}")
-            st.warning(f"**👀 下一步关注：** {ai_result.get('focus_next')}")
-
-            # 记录日志
-            st.session_state.logs.append({
-                "index": current_index,
-                "score": score,
-                "feedback": ai_result.get("coach_feedback")
-            })
-
-        except Exception as e:
-            st.error(f"AI 分析出错: {str(e)}")
-
-# =========================================================
-# 12. 历史记录
-# =========================================================
-if st.session_state.logs:
-    st.markdown("---")
-    st.markdown("### 📜 训练记录")
-    log_df = pd.DataFrame(st.session_state.logs)
-    st.dataframe(log_df, hide_index=True, height=200)
-(AI生成)
+st.markdown("---")
+st.caption("""
+训练目标：
+不是预测下一根K线。
+而是训练：
+1. 背景阅读 2. 控制权识别 3. 推进质量判断 4. 区分正常回调与真正转换 5. 理解市场是否接受新价格
+核心问题：当前K线，真的改变控制权了吗？
+""")
