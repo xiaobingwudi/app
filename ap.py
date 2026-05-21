@@ -343,7 +343,7 @@ st.plotly_chart(
 )
 
 # =========================================================
-# 结构训练区
+# 结构训练区（全部改成中文）
 # =========================================================
 
 st.markdown("---")
@@ -355,65 +355,65 @@ with left:
     market_control = st.radio(
         "当前谁控制市场？",
         [
-            "Bulls",
-            "Bears",
-            "Balanced"
+            "多头控制",
+            "空头控制",
+            "多空平衡"
         ]
     )
 
     market_type = st.radio(
         "当前市场类型？",
         [
-            "Trend",
-            "Trading Range",
-            "Breakout Attempt",
-            "Reversal Attempt"
+            "趋势",
+            "区间",
+            "突破尝试",
+            "反转尝试"
         ]
     )
 
     momentum_quality = st.radio(
-        "推进质量？",
+        "当前推进质量？",
         [
-            "Strong",
-            "Healthy",
-            "Weak",
-            "Deteriorating"
+            "强推进",
+            "健康推进",
+            "弱推进",
+            "推进衰减"
         ]
     )
 
     expectation = st.radio(
         "当前更可能？",
         [
-            "Continuation",
-            "Reversal",
-            "Range"
+            "延续",
+            "反转",
+            "继续区间"
         ]
     )
 
     breakout_quality = st.radio(
         "当前突破质量？",
         [
-            "Likely Success",
-            "Likely Failure",
-            "Unclear"
+            "突破成功概率高",
+            "突破失败概率高",
+            "暂时不明确"
         ]
     )
 
 with right:
 
     structure_events = st.multiselect(
-        "观察到的结构事件",
+        "你观察到的结构事件",
         [
-            "Failed Breakout",
-            "Wedge",
-            "Tight Channel",
-            "Expanding Triangle",
-            "Micro Double Top",
-            "Micro Double Bottom",
-            "Climactic Move",
-            "Overlap Increasing",
-            "Tail Increasing",
-            "Weak Follow-through"
+            "失败突破",
+            "楔形",
+            "紧密通道",
+            "扩张三角形",
+            "微型双顶",
+            "微型双底",
+            "高潮衰竭",
+            "重叠增加",
+            "尾巴增加",
+            "突破后跟进弱"
         ]
     )
 
@@ -421,17 +421,11 @@ with right:
         "一句话记录",
         max_chars=100,
         height=120,
-        placeholder="例如：bull trend开始失去连续性"
+        placeholder="例如：多头趋势开始失去连续性"
     )
 
 # =========================================================
-# 提交
-# =========================================================
-
-submit = st.button("提交当前判断")
-
-# =========================================================
-# 未来验证
+# 未来验证（中文）
 # =========================================================
 
 def validate_future(df, current_index):
@@ -445,13 +439,13 @@ def validate_future(df, current_index):
     move = future_close - current_close
 
     if move > 0:
-        direction = "Bull"
+        direction = "未来偏多"
 
     elif move < 0:
-        direction = "Bear"
+        direction = "未来偏空"
 
     else:
-        direction = "Balanced"
+        direction = "未来平衡"
 
     volatility = (
         future["high"].max()
@@ -475,20 +469,22 @@ def validate_future(df, current_index):
     }
 
 # =========================================================
-# AI 偏差反馈
+# AI反馈（中文）
 # =========================================================
 
 def get_ai_feedback(user_data, validation):
 
     prompt = f"""
-你是Al Brooks价格行为结构训练教练。
+你是 Al Brooks 价格行为结构训练教练。
 
 你的任务：
+
 不是分析市场。
 不是预测。
 不是讲理论。
 
 而是：
+
 指出用户在结构阅读中的观察偏差。
 
 用户判断：
@@ -554,16 +550,16 @@ def get_ai_feedback(user_data, validation):
     return response.choices[0].message.content
 
 # =========================================================
-# 偏差统计
+# 偏差统计（中文逻辑）
 # =========================================================
 
 def build_bias_statistics(logs):
 
     stats = {
-        "early_reversal": 0,
-        "trend_misread": 0,
-        "range_confusion": 0,
-        "failed_breakout_miss": 0
+        "过早猜反转": 0,
+        "趋势误判": 0,
+        "区间识别不足": 0,
+        "失败突破遗漏": 0
     }
 
     for log in logs:
@@ -573,32 +569,109 @@ def build_bias_statistics(logs):
         # 强趋势中过早猜反转
 
         if (
-            log["expectation"] == "Reversal"
-            and validation["direction"] in ["Bull", "Bear"]
+            log["expectation"] == "反转"
+            and validation["direction"] in ["未来偏多", "未来偏空"]
             and abs(validation["move"]) > 20
         ):
 
-            stats["early_reversal"] += 1
+            stats["过早猜反转"] += 1
 
         # 趋势误判
 
         if (
-            log["market_type"] == "Trading Range"
+            log["market_type"] == "区间"
             and abs(validation["move"]) > 30
         ):
 
-            stats["trend_misread"] += 1
+            stats["趋势误判"] += 1
 
-        # 区间识别问题
+        # 区间识别不足
 
         if (
-            log["market_type"] == "Trend"
+            log["market_type"] == "趋势"
             and validation["body_efficiency"] < 0.35
         ):
 
-            stats["range_confusion"] += 1
+            stats["区间识别不足"] += 1
 
-        # failed breakout遗漏
+        # 失败突破遗漏
+
+        if (
+            validation["body_efficiency"] < 0.3
+            and "失败突破" not in log["events"]
+        ):
+
+            stats["失败突破遗漏"] += 1
+
+    return stats
+
+# =========================================================
+# 结果展示（中文）
+# =========================================================
+
+st.markdown("---")
+
+st.subheader("未来验证结果")
+
+v1, v2, v3, v4 = st.columns(4)
+
+with v1:
+    st.metric(
+        "未来方向",
+        validation["direction"]
+    )
+
+with v2:
+    st.metric(
+        "价格变化",
+        validation["move"]
+    )
+
+with v3:
+    st.metric(
+        "波动范围",
+        validation["volatility"]
+    )
+
+with v4:
+    st.metric(
+        "实体效率",
+        validation["body_efficiency"]
+    )
+
+# =========================================================
+# 偏差画像（中文）
+# =========================================================
+
+st.markdown("---")
+
+st.subheader("你的结构偏差画像")
+
+if len(st.session_state.logs) > 0:
+
+    stats = build_bias_statistics(
+        st.session_state.logs
+    )
+
+    b1, b2 = st.columns(2)
+
+    with b1:
+
+        st.markdown(f"""
+### 高频错误
+
+- 过早猜反转：{stats['过早猜反转']}
+- 趋势误判：{stats['趋势误判']}
+""")
+
+    with b2:
+
+        st.markdown(f"""
+### 结构识别问题
+
+- 区间识别不足：{stats['区间识别不足']}
+- 失败突破遗漏：{stats['失败突破遗漏']}
+""")
 
         if (
             validation["body_efficiency"] < 0.3
