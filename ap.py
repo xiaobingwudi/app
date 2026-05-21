@@ -680,7 +680,7 @@ if len(st.session_state.logs) > 0:
 
             stats["failed_breakout_miss"] += 1
 
-    return stats
+
 
 # =========================================================
 # 提交逻辑
