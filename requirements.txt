@@ -1,5 +1,6 @@
 streamlit
-numpy
 pandas
+numpy
 plotly
 openai
+akshare
