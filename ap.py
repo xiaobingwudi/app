@@ -1,5 +1,5 @@
 # =========================================================
-# Al Brooks Structure Trainer V3
+# Al Brooks 结构训练器 V4
 # =========================================================
 
 import os
@@ -145,13 +145,13 @@ if "logs" not in st.session_state:
     st.session_state.logs = []
 
 if "current_index" not in st.session_state:
-    st.session_state.current_index = 120
+    st.session_state.current_index = None
 
 # =========================================================
 # 顶部
 # =========================================================
 
-st.title("Al Brooks 结构训练器")
+st.title("Al Brooks 结构训练器 V4")
 
 top1, top2, top3 = st.columns([1, 1, 2])
 
@@ -178,7 +178,7 @@ with top2:
         st.rerun()
 
 # =========================================================
-# 数据获取
+# 获取数据
 # =========================================================
 
 try:
@@ -190,10 +190,30 @@ except Exception as e:
     st.error(f"数据加载失败：{e}")
     st.stop()
 
+MIN_INDEX = 120
 MAX_INDEX = len(df) - 10
 
+# =========================================================
+# 首次随机
+# =========================================================
+
+if st.session_state.current_index is None:
+
+    st.session_state.current_index = np.random.randint(
+        MIN_INDEX,
+        MAX_INDEX
+    )
+
+# =========================================================
+# 防止越界
+# =========================================================
+
 if st.session_state.current_index > MAX_INDEX:
-    st.session_state.current_index = 120
+
+    st.session_state.current_index = np.random.randint(
+        MIN_INDEX,
+        MAX_INDEX
+    )
 
 current_index = st.session_state.current_index
 
@@ -220,6 +240,214 @@ chart_df.reset_index(
 current_bar_number = len(chart_df) - 1
 
 # =========================================================
+# Swing 检测
+# =========================================================
+
+def detect_swings(df):
+
+    swings = []
+
+    for i in range(2, len(df)-2):
+
+        current_high = df.iloc[i]["high"]
+        current_low = df.iloc[i]["low"]
+
+        # Swing High
+
+        if (
+            current_high > df.iloc[i-1]["high"]
+            and current_high > df.iloc[i-2]["high"]
+            and current_high > df.iloc[i+1]["high"]
+            and current_high > df.iloc[i+2]["high"]
+        ):
+
+            swings.append({
+                "index": i,
+                "type": "SH",
+                "price": current_high
+            })
+
+        # Swing Low
+
+        if (
+            current_low < df.iloc[i-1]["low"]
+            and current_low < df.iloc[i-2]["low"]
+            and current_low < df.iloc[i+1]["low"]
+            and current_low < df.iloc[i+2]["low"]
+        ):
+
+            swings.append({
+                "index": i,
+                "type": "SL",
+                "price": current_low
+            })
+
+    return swings
+
+# =========================================================
+# HH HL LH LL
+# =========================================================
+
+def detect_market_structure(swings):
+
+    labels = []
+
+    highs = [
+        s for s in swings
+        if s["type"] == "SH"
+    ]
+
+    lows = [
+        s for s in swings
+        if s["type"] == "SL"
+    ]
+
+    for i in range(1, len(highs)):
+
+        prev_price = highs[i-1]["price"]
+        current_price = highs[i]["price"]
+
+        if current_price > prev_price:
+
+            labels.append({
+                "index": highs[i]["index"],
+                "label": "HH"
+            })
+
+        else:
+
+            labels.append({
+                "index": highs[i]["index"],
+                "label": "LH"
+            })
+
+    for i in range(1, len(lows)):
+
+        prev_price = lows[i-1]["price"]
+        current_price = lows[i]["price"]
+
+        if current_price > prev_price:
+
+            labels.append({
+                "index": lows[i]["index"],
+                "label": "HL"
+            })
+
+        else:
+
+            labels.append({
+                "index": lows[i]["index"],
+                "label": "LL"
+            })
+
+    return labels
+
+# =========================================================
+# Tight Channel
+# =========================================================
+
+def detect_tight_channel(df):
+
+    recent = df.tail(10)
+
+    bull_count = 0
+    bear_count = 0
+    overlap_count = 0
+
+    for i in range(1, len(recent)):
+
+        current = recent.iloc[i]
+        prev = recent.iloc[i-1]
+
+        if current["close"] > current["open"]:
+
+            bull_count += 1
+
+        if current["close"] < current["open"]:
+
+            bear_count += 1
+
+        if current["low"] < prev["high"]:
+
+            overlap_count += 1
+
+    if (
+        bull_count >= 8
+        and overlap_count <= 3
+    ):
+
+        return "紧密多头通道"
+
+    if (
+        bear_count >= 8
+        and overlap_count <= 3
+    ):
+
+        return "紧密空头通道"
+
+    return None
+
+# =========================================================
+# Failed Breakout
+# =========================================================
+
+def detect_failed_breakout(df):
+
+    recent = df.tail(8)
+
+    highs = recent["high"].tolist()
+
+    breakout_high = max(highs[:-1])
+
+    last_bar = recent.iloc[-1]
+
+    if (
+        last_bar["high"] > breakout_high
+        and last_bar["close"] < breakout_high
+    ):
+
+        return "向上失败突破"
+
+    lows = recent["low"].tolist()
+
+    breakout_low = min(lows[:-1])
+
+    if (
+        last_bar["low"] < breakout_low
+        and last_bar["close"] > breakout_low
+    ):
+
+        return "向下失败突破"
+
+    return None
+
+# =========================================================
+# 自动结构
+# =========================================================
+
+swings = detect_swings(chart_df)
+
+market_labels = detect_market_structure(
+    swings
+)
+
+tight_channel = detect_tight_channel(
+    chart_df
+)
+
+failed_breakout = detect_failed_breakout(
+    chart_df
+)
+
+auto_structures = []
+
+if tight_channel:
+    auto_structures.append(tight_channel)
+
+if failed_breakout:
+    auto_structures.append(failed_breakout)
+
+# =========================================================
 # 顶部控制
 # =========================================================
 
@@ -229,7 +457,7 @@ with c1:
 
     if st.button("上一根"):
 
-        if st.session_state.current_index > 50:
+        if st.session_state.current_index > MIN_INDEX:
 
             st.session_state.current_index -= 1
             st.rerun()
@@ -247,10 +475,19 @@ with c3:
 
     if st.button("随机位置"):
 
-        st.session_state.current_index = np.random.randint(
-            120,
-            MAX_INDEX
-        )
+        old_index = st.session_state.current_index
+
+        while True:
+
+            new_index = np.random.randint(
+                MIN_INDEX,
+                MAX_INDEX
+            )
+
+            if abs(new_index - old_index) > 50:
+                break
+
+        st.session_state.current_index = new_index
 
         st.rerun()
 
@@ -279,10 +516,14 @@ fig.add_trace(
     )
 )
 
+# 当前K线
+
 fig.add_vline(
     x=current_bar_number,
     line_width=3
 )
+
+# K线编号
 
 for i in range(len(chart_df)):
 
@@ -292,6 +533,32 @@ for i in range(len(chart_df)):
         text=str(i),
         showarrow=False,
         font=dict(size=8)
+    )
+
+# Swing
+
+for swing in swings:
+
+    fig.add_annotation(
+        x=swing["index"],
+        y=swing["price"],
+        text=swing["type"],
+        showarrow=True,
+        font=dict(size=9)
+    )
+
+# HH HL LH LL
+
+for label in market_labels:
+
+    row = chart_df.iloc[label["index"]]
+
+    fig.add_annotation(
+        x=label["index"],
+        y=row["high"],
+        text=label["label"],
+        showarrow=False,
+        font=dict(size=10)
     )
 
 fig.update_layout(
@@ -305,6 +572,24 @@ st.plotly_chart(
     use_container_width=True,
     config={"displayModeBar": False}
 )
+
+# =========================================================
+# 自动结构识别
+# =========================================================
+
+st.markdown("---")
+
+st.subheader("自动结构识别")
+
+if len(auto_structures) == 0:
+
+    st.info("当前未检测到明显结构")
+
+else:
+
+    for item in auto_structures:
+
+        st.warning(item)
 
 # =========================================================
 # 结构判断
@@ -415,7 +700,7 @@ short_note = st.text_area(
 )
 
 # =========================================================
-# 提交按钮
+# 提交
 # =========================================================
 
 submit = st.button("提交当前判断")
@@ -472,7 +757,7 @@ def validate_future(df, current_index):
     }
 
 # =========================================================
-# 构建完整市场背景
+# 市场背景
 # =========================================================
 
 def build_market_context(chart_df):
@@ -544,7 +829,8 @@ def get_ai_feedback(
         user_data,
         validation,
         chart_df,
-        current_bar_number
+        current_bar_number,
+        auto_structures
 ):
 
     market_context = build_market_context(
@@ -560,25 +846,20 @@ def get_ai_feedback(
 2. 每根K线编号
 3. 用户正在判断的K线编号
 4. 用户的结构判断
-5. 后续5根K验证
-
-你的任务：
-
-不是预测市场。
-
-而是：
-
-指出用户：
-哪里忽略了背景、
-哪里误判了控制权、
-哪里错误理解了推进质量、
-哪里过早猜测反转。
+5. 自动结构识别结果
+6. 后续5根K验证
 
 ======================
 当前正在判断的K线编号
 ======================
 
 {current_bar_number}
+
+======================
+自动结构识别
+======================
+
+{auto_structures}
 
 ======================
 当前屏幕全部K线背景
@@ -636,6 +917,13 @@ def get_ai_feedback(
 1. 用户忽略了什么
 2. 哪个判断偏差最大
 3. 下次重点观察什么
+
+额外要求：
+
+1. 如果用户忽略了自动结构，要明确指出
+2. 如果用户和结构引擎冲突，要指出冲突
+3. 不允许模糊表达
+4. 必须具体指出是哪类结构
 
 禁止：
 
@@ -739,7 +1027,8 @@ if submit:
             log,
             validation,
             chart_df,
-            current_bar_number
+            current_bar_number,
+            auto_structures
         )
 
     except Exception as e:
@@ -855,5 +1144,21 @@ if st.button("导出训练日志"):
 st.markdown("---")
 
 st.caption("""
-系统目标：不是预测下一根K线。
+系统目标：
+
+不是预测下一根K线。
+
+而是训练：
+
+1. 市场控制权阅读
+2. 推进质量识别
+3. 趋势衰减识别
+4. 区间化识别
+5. 失败突破识别
+6. continuation vs reversal 判断
+
+核心问题：
+
+当前市场，
+真的发生控制权转换了吗？
 """)
