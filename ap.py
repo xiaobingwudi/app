@@ -1,8 +1,5 @@
 # =========================================================
 # Al Brooks Structure Trainer V2
-# 目标：
-# 训练“市场控制权阅读”
-# 而不是AI替你分析市场
 # =========================================================
 
 import os
@@ -21,23 +18,19 @@ from openai import OpenAI
 # =========================================================
 
 st.set_page_config(
-    page_title="Al Brooks Structure Trainer",
+    page_title="Al Brooks 结构训练器",
     layout="wide"
 )
 
 # =========================================================
-# API 配置 - 安全版
+# API 配置
 # =========================================================
 
-# 1. 从 st.secrets 中安全地读取 API Key
-# 这里的 "OPENAI_API_KEY" 是你在 Streamlit 后台设置的变量名
 api_key = st.secrets["OPENAI_API_KEY"]
 
-# 2. 其他配置可以保持不变，或者也用 secrets 管理
 BASE_URL = "https://api.videocaptioner.cn/v1"
 MODEL_NAME = "gpt-5.4-nano"
 
-# 3. 将读取到的 api_key 传给 OpenAI 客户端
 client = OpenAI(
     api_key=api_key,
     base_url=BASE_URL
@@ -66,49 +59,30 @@ html, body, [class*="css"] {
     border-radius: 8px;
 }
 
-.metric-box {
-    background: #f3f4f6;
-    padding: 10px;
-    border-radius: 10px;
+section[data-testid="stSidebar"] {
+    width: 320px !important;
 }
 
 </style>
 """, unsafe_allow_html=True)
 
 # =========================================================
-# 数据获取
+# 数据加载
 # =========================================================
 
 @st.cache_data(ttl=300)
 def load_data(symbol="IF0"):
-    """
-    新浪财经期货30分钟数据
-    """
 
     df = ak.futures_zh_minute_sina(
         symbol=symbol,
         period="30"
     )
 
-    # =====================================================
-    # 修复字段数量不一致问题
-    # =====================================================
-
-    # 有些品种返回6列
-    # 有些返回7列（带hold字段）
-    # 不能强行覆盖列名
-    # 必须动态处理
-
     raw_columns = df.columns.tolist()
-
-    # 常见返回：
-    # datetime open high low close volume hold
 
     rename_map = {}
 
     for i, col in enumerate(raw_columns):
-
-        col_lower = str(col).lower()
 
         if i == 0:
             rename_map[col] = "datetime"
@@ -133,10 +107,6 @@ def load_data(symbol="IF0"):
 
     df.rename(columns=rename_map, inplace=True)
 
-    # =====================================================
-    # 只保留核心字段
-    # =====================================================
-
     keep_cols = [
         "datetime",
         "open",
@@ -153,10 +123,6 @@ def load_data(symbol="IF0"):
 
     df = df[existing_cols].copy()
 
-    # =====================================================
-    # 类型转换
-    # =====================================================
-
     df["datetime"] = pd.to_datetime(df["datetime"])
 
     numeric_cols = [
@@ -169,14 +135,10 @@ def load_data(symbol="IF0"):
 
     for col in numeric_cols:
 
-        if col in df.columns:
-
-            df[col] = pd.to_numeric(
-                df[col],
-                errors="coerce"
-            )
-
-    # 删除空值
+        df[col] = pd.to_numeric(
+            df[col],
+            errors="coerce"
+        )
 
     df.dropna(inplace=True)
 
@@ -193,9 +155,6 @@ if "logs" not in st.session_state:
 
 if "current_index" not in st.session_state:
     st.session_state.current_index = 120
-
-if "symbol" not in st.session_state:
-    st.session_state.symbol = "IF0"
 
 # =========================================================
 # 顶部
@@ -223,18 +182,21 @@ with top1:
 with top2:
 
     if st.button("重新加载数据"):
+
         st.cache_data.clear()
         st.rerun()
 
 # =========================================================
-# 加载数据
+# 获取数据
 # =========================================================
 
 try:
+
     df = load_data(symbol)
 
 except Exception as e:
-    st.error(f"数据加载失败: {e}")
+
+    st.error(f"数据加载失败：{e}")
     st.stop()
 
 MAX_INDEX = len(df) - 10
@@ -245,16 +207,24 @@ if st.session_state.current_index > MAX_INDEX:
 current_index = st.session_state.current_index
 
 # =========================================================
-# 图表窗口
+# K线窗口
 # =========================================================
 
 WINDOW = 80
 
-start_index = max(0, current_index - WINDOW)
+start_index = max(
+    0,
+    current_index - WINDOW
+)
 
-chart_df = df.iloc[start_index:current_index + 1].copy()
+chart_df = df.iloc[
+    start_index:current_index + 1
+].copy()
 
-chart_df.reset_index(drop=True, inplace=True)
+chart_df.reset_index(
+    drop=True,
+    inplace=True
+)
 
 # =========================================================
 # 图表控制
@@ -267,6 +237,7 @@ with c1:
     if st.button("上一根"):
 
         if st.session_state.current_index > 50:
+
             st.session_state.current_index -= 1
             st.rerun()
 
@@ -275,6 +246,7 @@ with c2:
     if st.button("下一根"):
 
         if st.session_state.current_index < MAX_INDEX:
+
             st.session_state.current_index += 1
             st.rerun()
 
@@ -311,14 +283,10 @@ fig.add_trace(
     )
 )
 
-# 当前K高亮
-
 fig.add_vline(
     x=len(chart_df)-1,
     line_width=2
 )
-
-# K线编号
 
 for i in range(len(chart_df)):
 
@@ -343,14 +311,20 @@ st.plotly_chart(
 )
 
 # =========================================================
-# 结构训练区（全部改成中文）
+# 主训练区域
 # =========================================================
 
 st.markdown("---")
 
 left, right = st.columns([1, 1])
 
+# =========================================================
+# 左侧
+# =========================================================
+
 with left:
+
+    st.subheader("结构判断")
 
     market_control = st.radio(
         "当前谁控制市场？",
@@ -399,7 +373,13 @@ with left:
         ]
     )
 
+# =========================================================
+# 右侧
+# =========================================================
+
 with right:
+
+    st.subheader("结构事件")
 
     structure_events = st.multiselect(
         "你观察到的结构事件",
@@ -420,31 +400,44 @@ with right:
     short_note = st.text_area(
         "一句话记录",
         max_chars=100,
-        height=120,
+        height=340,
         placeholder="例如：多头趋势开始失去连续性"
     )
 
 # =========================================================
-# 未来验证（中文）
+# 提交按钮
+# =========================================================
+
+submit = st.button("提交当前判断")
+
+# =========================================================
+# 未来验证
 # =========================================================
 
 def validate_future(df, current_index):
 
-    future = df.iloc[current_index+1:current_index+6]
+    future = df.iloc[
+        current_index+1:current_index+6
+    ]
 
-    current_close = df.iloc[current_index]["close"]
+    current_close = df.iloc[
+        current_index
+    ]["close"]
 
     future_close = future.iloc[-1]["close"]
 
     move = future_close - current_close
 
     if move > 0:
+
         direction = "未来偏多"
 
     elif move < 0:
+
         direction = "未来偏空"
 
     else:
+
         direction = "未来平衡"
 
     volatility = (
@@ -469,23 +462,19 @@ def validate_future(df, current_index):
     }
 
 # =========================================================
-# AI反馈（中文）
+# AI反馈
 # =========================================================
 
 def get_ai_feedback(user_data, validation):
 
     prompt = f"""
-你是 Al Brooks 价格行为结构训练教练。
+你是Al Brooks价格行为训练教练。
 
 你的任务：
 
-不是分析市场。
-不是预测。
-不是讲理论。
+不是预测市场。
 
-而是：
-
-指出用户在结构阅读中的观察偏差。
+而是指出用户结构阅读偏差。
 
 用户判断：
 
@@ -510,7 +499,7 @@ def get_ai_feedback(user_data, validation):
 备注：
 {user_data['note']}
 
-未来5根K验证：
+未来验证：
 
 方向：
 {validation['direction']}
@@ -518,7 +507,7 @@ def get_ai_feedback(user_data, validation):
 价格变化：
 {validation['move']}
 
-波动范围：
+波动：
 {validation['volatility']}
 
 实体效率：
@@ -532,8 +521,6 @@ def get_ai_feedback(user_data, validation):
 2. 哪个判断偏差最大
 3. 下次重点观察什么
 
-不要安慰。
-不要长篇解释。
 限制150字。
 """
 
@@ -550,7 +537,7 @@ def get_ai_feedback(user_data, validation):
     return response.choices[0].message.content
 
 # =========================================================
-# 偏差统计（中文逻辑）
+# 偏差统计
 # =========================================================
 
 def build_bias_statistics(logs):
@@ -566,8 +553,6 @@ def build_bias_statistics(logs):
 
         validation = log["validation"]
 
-        # 强趋势中过早猜反转
-
         if (
             log["expectation"] == "反转"
             and validation["direction"] in ["未来偏多", "未来偏空"]
@@ -576,8 +561,6 @@ def build_bias_statistics(logs):
 
             stats["过早猜反转"] += 1
 
-        # 趋势误判
-
         if (
             log["market_type"] == "区间"
             and abs(validation["move"]) > 30
@@ -585,16 +568,12 @@ def build_bias_statistics(logs):
 
             stats["趋势误判"] += 1
 
-        # 区间识别不足
-
         if (
             log["market_type"] == "趋势"
             and validation["body_efficiency"] < 0.35
         ):
 
             stats["区间识别不足"] += 1
-
-        # 失败突破遗漏
 
         if (
             validation["body_efficiency"] < 0.3
@@ -604,83 +583,6 @@ def build_bias_statistics(logs):
             stats["失败突破遗漏"] += 1
 
     return stats
-
-# =========================================================
-# 结果展示（中文）
-# =========================================================
-
-st.markdown("---")
-
-st.subheader("未来验证结果")
-
-v1, v2, v3, v4 = st.columns(4)
-
-with v1:
-    st.metric(
-        "未来方向",
-        validation["direction"]
-    )
-
-with v2:
-    st.metric(
-        "价格变化",
-        validation["move"]
-    )
-
-with v3:
-    st.metric(
-        "波动范围",
-        validation["volatility"]
-    )
-
-with v4:
-    st.metric(
-        "实体效率",
-        validation["body_efficiency"]
-    )
-
-# =========================================================
-# 偏差画像（中文）
-# =========================================================
-
-st.markdown("---")
-
-st.subheader("你的结构偏差画像")
-
-if len(st.session_state.logs) > 0:
-
-    stats = build_bias_statistics(
-        st.session_state.logs
-    )
-
-    b1, b2 = st.columns(2)
-
-    with b1:
-
-        st.markdown(f"""
-### 高频错误
-
-- 过早猜反转：{stats['过早猜反转']}
-- 趋势误判：{stats['趋势误判']}
-""")
-
-    with b2:
-
-        st.markdown(f"""
-### 结构识别问题
-
-- 区间识别不足：{stats['区间识别不足']}
-- 失败突破遗漏：{stats['失败突破遗漏']}
-""")
-
-        if (
-            validation["body_efficiency"] < 0.3
-            and "Failed Breakout" not in log["events"]
-        ):
-
-            stats["failed_breakout_miss"] += 1
-
-
 
 # =========================================================
 # 提交逻辑
@@ -708,8 +610,6 @@ if submit:
 
     st.session_state.logs.append(log)
 
-    # AI反馈
-
     try:
 
         ai_feedback = get_ai_feedback(
@@ -719,10 +619,10 @@ if submit:
 
     except Exception as e:
 
-        ai_feedback = f"AI反馈失败: {e}"
+        ai_feedback = f"AI反馈失败：{e}"
 
     # =====================================================
-    # 结果展示
+    # 展示结果
     # =====================================================
 
     st.markdown("---")
@@ -732,24 +632,28 @@ if submit:
     v1, v2, v3, v4 = st.columns(4)
 
     with v1:
+
         st.metric(
             "未来方向",
             validation["direction"]
         )
 
     with v2:
+
         st.metric(
             "价格变化",
             validation["move"]
         )
 
     with v3:
+
         st.metric(
             "波动范围",
             validation["volatility"]
         )
 
     with v4:
+
         st.metric(
             "实体效率",
             validation["body_efficiency"]
@@ -782,8 +686,8 @@ if len(st.session_state.logs) > 0:
         st.markdown(f"""
 ### 高频错误
 
-- 过早猜反转：{stats['early_reversal']}
-- 趋势误判：{stats['trend_misread']}
+- 过早猜反转：{stats['过早猜反转']}
+- 趋势误判：{stats['趋势误判']}
 """)
 
     with b2:
@@ -791,12 +695,12 @@ if len(st.session_state.logs) > 0:
         st.markdown(f"""
 ### 结构识别问题
 
-- 区间识别不足：{stats['range_confusion']}
-- Failed Breakout遗漏：{stats['failed_breakout_miss']}
+- 区间识别不足：{stats['区间识别不足']}
+- 失败突破遗漏：{stats['失败突破遗漏']}
 """)
 
 # =========================================================
-# 日志导出
+# 导出日志
 # =========================================================
 
 if st.button("导出训练日志"):
@@ -840,8 +744,8 @@ st.caption("""
 2. 推进质量识别
 3. 趋势衰减识别
 4. 区间化识别
-5. failed breakout识别
-6. continuation vs reversal判断
+5. 失败突破识别
+6. continuation vs reversal 判断
 
 核心问题：
 
