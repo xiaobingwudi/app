@@ -261,7 +261,7 @@ with c3:
 
         st.rerun()
 
- with c4:
+with c4:
 
     st.caption(
         f"当前位置：{current_index}/{len(df)}"
