@@ -90,7 +90,54 @@ def load_data(symbol="IF0"):
         period="30"
     )
 
-    df.columns = [
+    # =====================================================
+    # 修复字段数量不一致问题
+    # =====================================================
+
+    # 有些品种返回6列
+    # 有些返回7列（带hold字段）
+    # 不能强行覆盖列名
+    # 必须动态处理
+
+    raw_columns = df.columns.tolist()
+
+    # 常见返回：
+    # datetime open high low close volume hold
+
+    rename_map = {}
+
+    for i, col in enumerate(raw_columns):
+
+        col_lower = str(col).lower()
+
+        if i == 0:
+            rename_map[col] = "datetime"
+
+        elif i == 1:
+            rename_map[col] = "open"
+
+        elif i == 2:
+            rename_map[col] = "high"
+
+        elif i == 3:
+            rename_map[col] = "low"
+
+        elif i == 4:
+            rename_map[col] = "close"
+
+        elif i == 5:
+            rename_map[col] = "volume"
+
+        elif i == 6:
+            rename_map[col] = "hold"
+
+    df.rename(columns=rename_map, inplace=True)
+
+    # =====================================================
+    # 只保留核心字段
+    # =====================================================
+
+    keep_cols = [
         "datetime",
         "open",
         "high",
@@ -99,10 +146,43 @@ def load_data(symbol="IF0"):
         "volume"
     ]
 
+    existing_cols = [
+        c for c in keep_cols
+        if c in df.columns
+    ]
+
+    df = df[existing_cols].copy()
+
+    # =====================================================
+    # 类型转换
+    # =====================================================
+
     df["datetime"] = pd.to_datetime(df["datetime"])
 
-    return df
+    numeric_cols = [
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume"
+    ]
 
+    for col in numeric_cols:
+
+        if col in df.columns:
+
+            df[col] = pd.to_numeric(
+                df[col],
+                errors="coerce"
+            )
+
+    # 删除空值
+
+    df.dropna(inplace=True)
+
+    df.reset_index(drop=True, inplace=True)
+
+    return df
 
 # =========================================================
 # Session
