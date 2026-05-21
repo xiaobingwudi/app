@@ -1,5 +1,5 @@
 # =========================================================
-# Al Brooks Structure Trainer V2
+# Al Brooks Structure Trainer V3
 # =========================================================
 
 import os
@@ -59,10 +59,6 @@ html, body, [class*="css"] {
     border-radius: 8px;
 }
 
-section[data-testid="stSidebar"] {
-    width: 320px !important;
-}
-
 </style>
 """, unsafe_allow_html=True)
 
@@ -116,12 +112,7 @@ def load_data(symbol="IF0"):
         "volume"
     ]
 
-    existing_cols = [
-        c for c in keep_cols
-        if c in df.columns
-    ]
-
-    df = df[existing_cols].copy()
+    df = df[keep_cols].copy()
 
     df["datetime"] = pd.to_datetime(df["datetime"])
 
@@ -159,8 +150,8 @@ if "current_index" not in st.session_state:
 # =========================================================
 # 顶部
 # =========================================================
-st.title("----------------------------")
-st.title("Al Brooks 结构训练器 V2【不是预测下一根K线。核心问题：当前市场，真的发生控制权转换了吗？】")
+
+st.title("Al Brooks 结构训练器")
 
 top1, top2, top3 = st.columns([1, 1, 2])
 
@@ -187,7 +178,7 @@ with top2:
         st.rerun()
 
 # =========================================================
-# 获取数据
+# 数据获取
 # =========================================================
 
 try:
@@ -226,8 +217,10 @@ chart_df.reset_index(
     inplace=True
 )
 
+current_bar_number = len(chart_df) - 1
+
 # =========================================================
-# 图表控制
+# 顶部控制
 # =========================================================
 
 c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
@@ -263,12 +256,15 @@ with c3:
 
 with c4:
 
-    st.caption(
-        f"当前位置：{current_index}/{len(df)}"
-    )
+    st.markdown(f"""
+当前训练K线：
+
+- 全局编号：{current_index}
+- 当前窗口编号：{current_bar_number}
+""")
 
 # =========================================================
-# 绘图
+# 图表
 # =========================================================
 
 fig = go.Figure()
@@ -284,8 +280,8 @@ fig.add_trace(
 )
 
 fig.add_vline(
-    x=len(chart_df)-1,
-    line_width=2
+    x=current_bar_number,
+    line_width=3
 )
 
 for i in range(len(chart_df)):
@@ -299,7 +295,7 @@ for i in range(len(chart_df)):
     )
 
 fig.update_layout(
-    height=550,
+    height=600,
     xaxis_rangeslider_visible=False,
     margin=dict(l=0, r=0, t=0, b=0)
 )
@@ -311,27 +307,22 @@ st.plotly_chart(
 )
 
 # =========================================================
-# 主训练区域
+# 结构判断
 # =========================================================
 
 st.markdown("---")
 
-left, right = st.columns([1, 1])
-
-# =========================================================
-# 结构判断（3列2行布局）
-# =========================================================
-
-st.markdown("---")
-st.subheader("结构判断")
+st.subheader(
+    f"当前正在判断：窗口编号 {current_bar_number}"
+)
 
 # =========================================================
 # 第一行
 # =========================================================
 
-row1_col1, row1_col2, row1_col3 = st.columns(3)
+r1c1, r1c2, r1c3 = st.columns(3)
 
-with row1_col1:
+with r1c1:
 
     market_control = st.radio(
         "当前谁控制市场？",
@@ -339,11 +330,10 @@ with row1_col1:
             "多头控制",
             "空头控制",
             "多空平衡"
-        ],
-        horizontal=False
+        ]
     )
 
-with row1_col2:
+with r1c2:
 
     market_type = st.radio(
         "当前市场类型？",
@@ -352,11 +342,10 @@ with row1_col2:
             "区间",
             "突破尝试",
             "反转尝试"
-        ],
-        horizontal=False
+        ]
     )
 
-with row1_col3:
+with r1c3:
 
     momentum_quality = st.radio(
         "当前推进质量？",
@@ -365,17 +354,16 @@ with row1_col3:
             "健康推进",
             "弱推进",
             "推进衰减"
-        ],
-        horizontal=False
+        ]
     )
 
 # =========================================================
 # 第二行
 # =========================================================
 
-row2_col1, row2_col2, row2_col3 = st.columns(3)
+r2c1, r2c2, r2c3 = st.columns(3)
 
-with row2_col1:
+with r2c1:
 
     expectation = st.radio(
         "当前更可能？",
@@ -383,11 +371,10 @@ with row2_col1:
             "延续",
             "反转",
             "继续区间"
-        ],
-        horizontal=False
+        ]
     )
 
-with row2_col2:
+with r2c2:
 
     breakout_quality = st.radio(
         "当前突破质量？",
@@ -395,11 +382,10 @@ with row2_col2:
             "突破成功概率高",
             "突破失败概率高",
             "暂时不明确"
-        ],
-        horizontal=False
+        ]
     )
 
-with row2_col3:
+with r2c3:
 
     structure_events = st.multiselect(
         "结构事件",
@@ -423,7 +409,7 @@ with row2_col3:
 
 short_note = st.text_area(
     "一句话记录",
-    max_chars=100,
+    max_chars=120,
     height=100,
     placeholder="例如：多头趋势开始失去连续性"
 )
@@ -486,21 +472,123 @@ def validate_future(df, current_index):
     }
 
 # =========================================================
+# 构建完整市场背景
+# =========================================================
+
+def build_market_context(chart_df):
+
+    lines = []
+
+    for i, row in chart_df.iterrows():
+
+        direction = (
+            "阳线"
+            if row["close"] >= row["open"]
+            else "阴线"
+        )
+
+        total_range = (
+            row["high"] - row["low"]
+        )
+
+        body = abs(
+            row["close"] - row["open"]
+        )
+
+        upper_tail = (
+            row["high"]
+            - max(
+                row["open"],
+                row["close"]
+            )
+        )
+
+        lower_tail = (
+            min(
+                row["open"],
+                row["close"]
+            )
+            - row["low"]
+        )
+
+        body_ratio = 0
+
+        if total_range > 0:
+
+            body_ratio = round(
+                body / total_range,
+                2
+            )
+
+        lines.append(
+            f"""
+编号:{i}
+{direction}
+开:{row['open']}
+高:{row['high']}
+低:{row['low']}
+收:{row['close']}
+实体占比:{body_ratio}
+上影:{round(upper_tail,2)}
+下影:{round(lower_tail,2)}
+"""
+        )
+
+    return "\n".join(lines)
+
+# =========================================================
 # AI反馈
 # =========================================================
 
-def get_ai_feedback(user_data, validation):
+def get_ai_feedback(
+        user_data,
+        validation,
+        chart_df,
+        current_bar_number
+):
+
+    market_context = build_market_context(
+        chart_df
+    )
 
     prompt = f"""
-你是Al Brooks价格行为训练教练。
+你是Al Brooks价格行为结构训练教练。
+
+你已经获得：
+
+1. 当前屏幕显示的全部K线背景
+2. 每根K线编号
+3. 用户正在判断的K线编号
+4. 用户的结构判断
+5. 后续5根K验证
 
 你的任务：
 
 不是预测市场。
 
-而是指出用户结构阅读偏差。
+而是：
 
-用户判断：
+指出用户：
+哪里忽略了背景、
+哪里误判了控制权、
+哪里错误理解了推进质量、
+哪里过早猜测反转。
+
+======================
+当前正在判断的K线编号
+======================
+
+{current_bar_number}
+
+======================
+当前屏幕全部K线背景
+======================
+
+{market_context}
+
+======================
+用户判断
+======================
 
 市场控制：
 {user_data['market_control']}
@@ -523,7 +611,9 @@ def get_ai_feedback(user_data, validation):
 备注：
 {user_data['note']}
 
-未来验证：
+======================
+未来5根K验证
+======================
 
 方向：
 {validation['direction']}
@@ -537,7 +627,9 @@ def get_ai_feedback(user_data, validation):
 实体效率：
 {validation['body_efficiency']}
 
-要求：
+======================
+要求
+======================
 
 只输出：
 
@@ -545,7 +637,13 @@ def get_ai_feedback(user_data, validation):
 2. 哪个判断偏差最大
 3. 下次重点观察什么
 
-限制150字。
+禁止：
+
+- 安慰
+- 废话
+- 长篇理论
+
+限制200字。
 """
 
     response = client.chat.completions.create(
@@ -622,6 +720,7 @@ if submit:
     log = {
         "time": str(datetime.now()),
         "bar_index": current_index,
+        "window_bar_number": current_bar_number,
         "market_control": market_control,
         "market_type": market_type,
         "momentum_quality": momentum_quality,
@@ -638,16 +737,14 @@ if submit:
 
         ai_feedback = get_ai_feedback(
             log,
-            validation
+            validation,
+            chart_df,
+            current_bar_number
         )
 
     except Exception as e:
 
         ai_feedback = f"AI反馈失败：{e}"
-
-    # =====================================================
-    # 展示结果
-    # =====================================================
 
     st.markdown("---")
 
