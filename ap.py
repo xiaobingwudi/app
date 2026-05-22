@@ -824,13 +824,20 @@ def observe_control(chart_df: pd.DataFrame, legs: list, swings: list, current_ba
     用户自己从观察中推断控制权。
     """
     observations = []
-    
-    last_leg = next((l for l in reversed(legs) if l.end_idx <= current_bar), None)
+    if len(chart_df) == 0 or current_bar < 0 or current_bar >= len(chart_df):
+        return ["数据不足"]
+
+    cur = chart_df.iloc[current_bar]
+
+    # 防御：过滤掉非 Leg 实例
+    safe_legs = [l for l in legs if hasattr(l, 'end_idx') and hasattr(l, 'direction')]
+
+    last_leg = next((l for l in reversed(safe_legs) if l.end_idx <= current_bar), None)
     if last_leg:
         observations.append(f"最近波段: {last_leg.direction}方向, {last_leg.bar_count}根, 实体{last_leg.body_avg:.0%}")
-    
-    if len(legs) >= 2:
-        prev = next((l for l in reversed(legs) if l != last_leg and l.end_idx <= current_bar), None)
+
+    if len(safe_legs) >= 2:
+        prev = next((l for l in reversed(safe_legs) if l != last_leg and l.end_idx <= current_bar), None)
         if prev and last_leg:
             if last_leg.direction != prev.direction:
                 # 回调分析
@@ -842,28 +849,21 @@ def observe_control(chart_df: pd.DataFrame, legs: list, swings: list, current_ba
                 if last_leg.body_avg > 1e-9 and prev.body_avg > 1e-9:
                     ratio = last_leg.body_avg / prev.body_avg
                     observations.append(f"同方向波段实体比: {ratio:.1f}x")
-    
+
     # HC/LC 观察
     recent = chart_df.tail(10)
     if len(recent) >= 5:
         hc = sum(1 for i in range(1, len(recent)) if recent.iloc[i]["close"] > recent.iloc[i - 1]["close"])
         lc = sum(1 for i in range(1, len(recent)) if recent.iloc[i]["close"] < recent.iloc[i - 1]["close"])
         observations.append(f"最近10根: HC={hc}, LC={lc}, 净差={hc - lc:+d}")
-    
+
     # 最近Swing
     recent_swings = [s for s in swings if s.index <= current_bar]
     if recent_swings:
         last_swing = recent_swings[-1]
         observations.append(f"最近Swing: {'High' if last_swing.kind == 'SH' else 'Low'} #{last_swing.index}")
-    
+
     return observations
-
-
-# =========================================================
-# V10: 位置观察（替代 LocationContext 布尔值）
-# 不输出布尔值，只描述位置事实
-# =========================================================
-
 def observe_location(chart_df, swings, legs, current_bar) -> list:
     """
     V10: 不输出布尔值，只描述位置事实。
@@ -929,7 +929,7 @@ def build_snapshot(chart_df, swings, legs, current_bar, session):
     visible = chart_df.iloc[:current_bar + 1]
     
     # 各维度观察（都是原始事实描述）
-    control_obs = observe_control(chart_df, swings, legs, current_bar)
+    control_obs = observe_control(chart_df, legs, swings, current_bar)
     location_obs = observe_location(chart_df, swings, legs, current_bar)
     
     # 行为变化
