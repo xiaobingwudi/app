@@ -196,44 +196,53 @@ def extract_chart_context(chart_df, swings, legs, bar):
 # AI 教练 — 苏格拉底式提问
 # =========================================================
 def call_ai(user_message: str, skill_name: str, context: dict) -> str:
-    try:
-        api_key = st.secrets["OPENAI_API_KEY"]
-        client = OpenAI(
-            api_key=api_key,
-            base_url="https://api.videocaptioner.cn/v1",
-        )
-        bars_summary = context.get("bars", [])
-        recent_bars = bars_summary[-15:]
+    import json
+    max_retries = 3
+    api_key = st.secrets["OPENAI_API_KEY"]
+    client = OpenAI(
+        api_key=api_key,
+        base_url="https://api.videocaptioner.cn/v1",
+    )
+    bars_summary = context.get("bars", [])
+    recent_bars = bars_summary[-15:]
 
-        parts = [
-            "当前训练目标：{}".format(skill_name),
-            "当前在第{}根K线，共{}根。".format(
-                context.get("current_bar", 0), context.get("total_bars", 0)),
-            "",
-            "最近K线数据：",
-            "\n".join(recent_bars),
-        ]
-        if context.get("legs"):
-            parts += ["", "波段："] + context["legs"]
-        if context.get("swings"):
-            parts += ["", "Swing："] + context["swings"]
-        parts.append("")
-        parts.append(user_message)
+    parts = [
+        "当前训练目标：{}".format(skill_name),
+        "当前在第{}根K线，共{}根。".format(
+            context.get("current_bar", 0), context.get("total_bars", 0)),
+        "",
+        "最近K线数据：",
+    ] + recent_bars
+    if context.get("legs"):
+        parts += ["", "波段："] + context["legs"]
+    if context.get("swings"):
+        parts += ["", "Swing："] + context["swings"]
+    parts.append("")
+    parts.append(user_message)
 
-        full_prompt = "\n".join(parts)
+    full_prompt = "\n".join(parts)
 
-        response = client.chat.completions.create(
-            model="gpt-5.4-nano",
-            messages=[
-                {"role": "system", "content": AI_SYSTEM_PROMPT},
-                {"role": "user", "content": full_prompt},
-            ],
-            temperature=0.7,
-            max_tokens=300,
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        return "AI调用失败: {}".format(e)
+    for attempt in range(max_retries):
+        try:
+            response = client.chat.completions.create(
+                model="gpt-5.4-nano",
+                messages=[
+                    {"role": "system", "content": AI_SYSTEM_PROMPT},
+                    {"role": "user", "content": full_prompt},
+                ],
+                temperature=0.7,
+                max_tokens=300,
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            err_str = str(e)
+            # 429 限流：指数退避重试
+            if attempt < max_retries - 1 and ("429" in err_str or "rate" in err_str.lower()):
+                wait = 2 ** (attempt + 1)
+                time.sleep(wait)
+                continue
+            return "AI调用失败: {}".format(e)
+    return "AI调用失败: 请求过于频繁，请稍后再试"
 
 
 def ai_observe(context: dict, skill_name: str) -> str:
