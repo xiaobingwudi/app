@@ -197,9 +197,7 @@ def extract_chart_context(chart_df, swings, legs, bar):
 # =========================================================
 def call_ai(user_message: str, skill_name: str, context: dict) -> str:
     try:
-        api_key = os.environ.get("OPENAI_API_KEY", "")
-        if not api_key:
-            return "未配置 OPENAI_API_KEY"
+        api_key = st.secrets["OPENAI_API_KEY"]
         client = OpenAI(
             api_key=api_key,
             base_url="https://api.videocaptioner.cn/v1",
