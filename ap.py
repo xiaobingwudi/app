@@ -2,18 +2,17 @@
 # Al Brooks 读盘训练器 V12
 # =========================================================
 #
-# 训练目标（不是预测下一根K线）：
-#   1. 背景阅读     — 识别市场背景（趋势/区间/关键位）
+# 训练目标：
+#   1. 背景阅读     — 识别市场背景
 #   2. 控制权识别   — 判断谁在控制市场
-#   3. 推进质量判断 — 评估推进波的强弱
-#   4. 回调vs转换   — 区分正常回调与真正控制权转换
+#   3. 推进质量判断 — 评估推进波强弱
+#   4. 回调 vs 转换 — 区分正常回调与真正转换
 #   5. 市场接受     — 市场是否接受新价格
 #
 # 设计原则：
-#   - 用户做判断，系统做辅助
-#   - AI 不给答案，只提问和指向
-#   - Replay 是唯一的训练方式
-#   - 系统不展示"结论"，只提供"观察材料"
+#   - 用户直接看 K 线图，系统不写文字总结
+#   - AI 是苏格拉底式教练：不给答案，通过提问发现盲点
+#   - Replay 是唯一训练方式
 #
 # =========================================================
 
@@ -21,47 +20,35 @@ import os
 import time
 from datetime import datetime
 from dataclasses import dataclass
-from collections import Counter
 
 import numpy as np
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 import akshare as ak
+from openai import OpenAI
 
 # =========================================================
 # 常量
 # =========================================================
 SWING_LOOKBACK = 3
 
-# 5个训练目标定义
 SKILLS = {
-    1: {
-        "name": "背景阅读",
-        "question": "当前市场背景是什么？",
-        "hint": "看整体结构：是趋势还是区间？关键位在哪里？",
-    },
-    2: {
-        "name": "控制权识别",
-        "question": "现在谁在控制市场？",
-        "hint": "看谁在推进：买方还是卖方？推进是否持续？",
-    },
-    3: {
-        "name": "推进质量",
-        "question": "最近推进的质量如何？",
-        "hint": "看实体大小、连续性、尾巴比例、是否被反包",
-    },
-    4: {
-        "name": "回调 vs 转换",
-        "question": "这是正常回调还是控制权转换？",
-        "hint": "回调深度、是否回到起点、反包力度、跟进行为",
-    },
-    5: {
-        "name": "市场接受",
-        "question": "市场是否接受了新价格？",
-        "hint": "价格是否维持在新水平？后续K线是否确认？",
-    },
+    1: {"name": "背景阅读",     "question": "当前市场背景是什么？"},
+    2: {"name": "控制权识别",   "question": "现在谁在控制市场？"},
+    3: {"name": "推进质量",     "question": "最近推进的质量如何？"},
+    4: {"name": "回调vs转换",   "question": "这是正常回调还是控制权转换？"},
+    5: {"name": "市场接受",     "question": "市场是否接受了新价格？"},
 }
+
+AI_SYSTEM_PROMPT = (
+    "你是一个 Al Brooks 价格行为读盘教练。"
+    "你的角色不是给学生答案，而是通过提问帮助他们发现自己可能忽略的地方。"
+    "规则：绝对不能告诉学生正确答案；绝对不能解释市场行为；"
+    "只能提问和指向具体的K线位置；问题要简短、直接、具体；"
+    "每次最多2-3个问题；用中文回复。"
+    "指向具体K线范围时用第X根到第Y根。不要加前缀或编号。"
+)
 
 
 # =========================================================
@@ -70,7 +57,7 @@ SKILLS = {
 @dataclass
 class SwingPoint:
     index: int
-    kind: str    # "SH" / "SL"
+    kind: str
     price: float
 
 
@@ -78,7 +65,7 @@ class SwingPoint:
 class Leg:
     start_idx: int
     end_idx: int
-    direction: str   # "bull" / "bear"
+    direction: str
     bar_count: int
     price_start: float
     price_end: float
@@ -88,12 +75,10 @@ class Leg:
 
 @dataclass
 class SkillAnswer:
-    """用户对某个训练目标的回答"""
     skill_id: int
     bar: int
     answer: str
     timestamp: str
-
 
 # =========================================================
 # 数据加载
@@ -104,9 +89,8 @@ def load_data(symbol: str = "IF0") -> pd.DataFrame:
         try:
             df = ak.futures_zh_minute_sina(symbol=symbol, period="15")
             df = df.rename(columns={
-                "datetime": "datetime",
-                "open": "open", "high": "high",
-                "low": "low", "close": "close",
+                "datetime": "datetime", "open": "open",
+                "high": "high", "low": "low", "close": "close",
             })
             df = df.reset_index(drop=True)
             df["datetime"] = pd.to_datetime(df["datetime"])
@@ -114,13 +98,13 @@ def load_data(symbol: str = "IF0") -> pd.DataFrame:
                 df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
             df = df.dropna(subset=["open", "high", "low", "close"])
             return df.reset_index(drop=True)
-        except Exception as e:
+        except Exception:
             time.sleep(1)
     return pd.DataFrame()
 
 
 # =========================================================
-# 检测函数 — 只提供原始数据，不做判断
+# 检测函数
 # =========================================================
 def detect_swings(df: pd.DataFrame) -> list:
     N = SWING_LOOKBACK
@@ -164,127 +148,151 @@ def detect_legs(df: pd.DataFrame, swings: list) -> list:
     return legs
 
 
-def get_raw_materials(chart_df, swings, legs, bar):
-    """提取当前 bar 附近的原始观察材料（给用户看，不是给系统分析的）"""
-    materials = {}
+
+# =========================================================
+# 图表上下文提取（给 AI 用）
+# =========================================================
+def extract_chart_context(chart_df, swings, legs, bar):
     n = len(chart_df)
     if bar < 0 or bar >= n:
-        return materials
+        return None
+    lookback = min(25, bar)
+    recent = chart_df.iloc[bar - lookback: bar + 1].copy()
 
-    cur = chart_df.iloc[bar]
+    bars_text = []
+    for idx in range(len(recent)):
+        row = recent.iloc[idx]
+        actual_bar = bar - lookback + idx
+        d = "+" if row["close"] > row["open"] else "-" if row["close"] < row["open"] else "="
+        bars_text.append(
+            "#{0} O:{1:.1f} H:{2:.1f} L:{3:.1f} C:{4:.1f} {5}".format(
+                actual_bar, row["open"], row["high"], row["low"], row["close"], d
+            )
+        )
 
-    # 1. 最近 K 线的原始数据
-    lookback = min(20, bar)
-    recent = chart_df.iloc[bar - lookback: bar + 1]
-
-    # HC/LC 统计（原始数字）
-    hc, lc = 0, 0
-    for i in range(1, len(recent)):
-        if recent.iloc[i]["close"] > recent.iloc[i - 1]["close"]:
-            hc += 1
-        else:
-            lc += 1
-    materials["hc"] = hc
-    materials["lc"] = lc
-
-    # 实体均值（前半 vs 后半）
-    mid = len(recent) // 2
-    first_bodies = (recent.iloc[:mid]["close"] - recent.iloc[:mid]["open"]).abs()
-    second_bodies = (recent.iloc[mid:]["close"] - recent.iloc[mid:]["open"]).abs()
-    materials["body_avg_first"] = first_bodies.mean()
-    materials["body_avg_second"] = second_bodies.mean()
-
-    # 最近波段
     safe_legs = [l for l in legs if hasattr(l, "end_idx") and l.end_idx <= bar]
-    if safe_legs:
-        last_leg = safe_legs[-1]
-        materials["last_leg"] = {
-            "direction": last_leg.direction,
-            "bars": last_leg.bar_count,
-            "range": round(last_leg.price_range, 2),
-            "body": round(last_leg.body_avg, 3),
-        }
-        if len(safe_legs) >= 2:
-            prev_leg = safe_legs[-2]
-            materials["prev_leg"] = {
-                "direction": prev_leg.direction,
-                "bars": prev_leg.bar_count,
-                "range": round(prev_leg.price_range, 2),
-            }
-            # 回调占推进的比例
-            if last_leg.price_range > 1e-9:
-                ratio = prev_leg.price_range / last_leg.price_range
-                materials["pullback_ratio"] = round(ratio, 2)
+    legs_text = []
+    for l in safe_legs[-4:]:
+        d = "多" if l.direction == "bull" else "空"
+        legs_text.append("波段{0}: #{1}-{2} {3}根 范围{4:.1f}".format(
+            d, l.start_idx, l.end_idx, l.bar_count, l.price_range))
 
-    # 最近 Swing
     safe_swings = [s for s in swings if hasattr(s, "index") and s.index <= bar]
-    if safe_swings:
-        materials["last_swing"] = {
-            "kind": safe_swings[-1].kind,
-            "index": safe_swings[-1].index,
-            "price": round(safe_swings[-1].price, 2),
-        }
-        if len(safe_swings) >= 2:
-            materials["prev_swing"] = {
-                "kind": safe_swings[-2].kind,
-                "index": safe_swings[-2].index,
-                "price": round(safe_swings[-2].price, 2),
-            }
+    swings_text = []
+    for s in safe_swings[-4:]:
+        label = "SH" if s.kind == "SH" else "SL"
+        swings_text.append("{0}: #{1} {2:.1f}".format(label, s.index, s.price))
 
-    # 全局位置
-    full_high = chart_df["high"].max()
-    full_low = chart_df["low"].min()
-    full_range = full_high - full_low
-    if full_range > 1e-9:
-        materials["price_position"] = round(
-            (cur["close"] - full_low) / full_range * 100, 0)
+    return {
+        "current_bar": bar,
+        "total_bars": n,
+        "bars": bars_text,
+        "legs": legs_text,
+        "swings": swings_text,
+    }
 
-    # 当前 bar 的实体信息
-    body = abs(cur["close"] - cur["open"])
-    total = cur["high"] - cur["low"]
-    materials["cur_body_pct"] = round(body / total * 100, 0) if total > 1e-9 else 0
-    materials["cur_direction"] = ("阳线" if cur["close"] > cur["open"]
-                                  else "阴线" if cur["close"] < cur["open"]
-                                  else "十字")
 
-    return materials
+# =========================================================
+# AI 教练 — 苏格拉底式提问
+# =========================================================
+def call_ai(user_message: str, skill_name: str, context: dict) -> str:
+    try:
+        api_key = os.environ.get("OPENAI_API_KEY", "")
+        if not api_key:
+            return "未配置 OPENAI_API_KEY"
+        client = OpenAI(
+            api_key=api_key,
+            base_url="https://api.videocaptioner.cn/v1",
+        )
+        bars_summary = context.get("bars", [])
+        recent_bars = bars_summary[-15:]
+
+        parts = [
+            "当前训练目标：{}".format(skill_name),
+            "当前在第{}根K线，共{}根。".format(
+                context.get("current_bar", 0), context.get("total_bars", 0)),
+            "",
+            "最近K线数据：",
+            "\n".join(recent_bars),
+        ]
+        if context.get("legs"):
+            parts += ["", "波段："] + context["legs"]
+        if context.get("swings"):
+            parts += ["", "Swing："] + context["swings"]
+        parts.append("")
+        parts.append(user_message)
+
+        full_prompt = "\n".join(parts)
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": AI_SYSTEM_PROMPT},
+                {"role": "user", "content": full_prompt},
+            ],
+            temperature=0.7,
+            max_tokens=300,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        return "AI调用失败: {}".format(e)
+
+
+def ai_observe(context: dict, skill_name: str) -> str:
+    prompt = (
+        "用户正在训练「{}」。".format(skill_name)
+        + "请指出在这个画面中，用户应该重点观察哪几根K线。"
+        + "只指出K线范围和应该关注什么特征，不要给出结论。"
+    )
+    return call_ai(prompt, skill_name, context)
+
+
+def ai_challenge(answer: str, context: dict, skill_name: str) -> str:
+    prompt = (
+        "训练目标「{}」\n用户的判断：{}\n\n".format(skill_name, answer)
+        + "请针对这个判断提出2-3个追问，帮助用户发现自己可能忽略的地方。"
+    )
+    return call_ai(prompt, skill_name, context)
+
+
+def ai_reveal(context_after: dict, answer: str, skill_name: str) -> str:
+    bars_after = context_after.get("bars", [])[-10:]
+    prompt = (
+        "训练目标「{}」\n用户的判断：{}\n\n".format(skill_name, answer)
+        + "之后走出的K线：\n" + "\n".join(bars_after) + "\n\n"
+        + "价格已经走出来了。请提出2-3个问题，"
+        + "引导学生回顾自己的判断过程，不要直接说对错。"
+    )
+    return call_ai(prompt, skill_name, context_after)
 
 
 
 # =========================================================
-# 图表 — 可切换标注层
+# 图表
 # =========================================================
 def build_chart(chart_df, swings, legs, bar, show_swings=True, show_legs=True):
-    """构建 K 线图，用户选择要看哪些标注"""
     fig = go.Figure()
     visible = chart_df.iloc[:bar + 1]
-
     if len(visible) == 0:
         return fig
 
     fig.add_trace(go.Candlestick(
-        x=visible.index,
-        open=visible["open"], high=visible["high"],
+        x=visible.index, open=visible["open"], high=visible["high"],
         low=visible["low"], close=visible["close"],
-        increasing_line_color="#e74c3c",
-        decreasing_line_color="#2ecc71",
+        increasing_line_color="#e74c3c", decreasing_line_color="#2ecc71",
     ))
 
     annotations = []
-
-    # Swing 标注
     if show_swings:
         for s in swings:
             if hasattr(s, "index") and s.index <= bar:
                 label = "SH" if s.kind == "SH" else "SL"
-                y_off = -30 if s.kind == "SH" else 30
                 annotations.append(dict(
                     x=s.index, y=s.price, text=label,
-                    showarrow=True, arrowhead=1, arrowcolor="#555",
-                    font=dict(size=10, color="#555"),
-                    ax=0, ay=y_off,
+                    showarrow=True, arrowhead=1, arrowcolor="#888",
+                    font=dict(size=10, color="#888"),
+                    ax=0, ay=-30 if s.kind == "SH" else 30,
                 ))
-                # Swing 连线
         swing_highs = [(s.index, s.price) for s in swings
                        if hasattr(s, "kind") and s.kind == "SH" and s.index <= bar]
         swing_lows = [(s.index, s.price) for s in swings
@@ -300,27 +308,24 @@ def build_chart(chart_df, swings, legs, bar, show_swings=True, show_legs=True):
                 line=dict(color="#e67e22", width=1, dash="dot"),
                 marker=dict(size=3), showlegend=False, hoverinfo="skip"))
 
-    # 波段标注
     if show_legs:
         safe_legs = [l for l in legs if hasattr(l, "end_idx") and l.end_idx <= bar]
-        for leg in safe_legs[-6:]:  # 只显示最近6个波段
+        for leg in safe_legs[-6:]:
             mid_bar = (leg.start_idx + leg.end_idx) // 2
             mid_price = (leg.price_start + leg.price_end) / 2
             label = "多" if leg.direction == "bull" else "空"
+            color = "#8e44ad" if leg.direction == "bull" else "#c0392b"
             annotations.append(dict(
                 x=mid_bar, y=mid_price,
-                text=f"{label}({leg.bar_count}根 {leg.price_range:.0f}pt)",
-                showarrow=False,
-                font=dict(size=9, color="#8e44ad" if leg.direction == "bull" else "#c0392b"),
+                text="{}({}根 {:.0f}pt)".format(label, leg.bar_count, leg.price_range),
+                showarrow=False, font=dict(size=9, color=color),
             ))
 
-    # 当前 bar 标记
     cur = chart_df.iloc[bar]
     annotations.append(dict(
-        x=bar, y=cur["high"],
-        text=f"#{bar}",
-        showarrow=True, arrowhead=0, arrowcolor="#999",
-        font=dict(size=8, color="#999"), ax=0, ay=25,
+        x=bar, y=cur["high"], text="#{}".format(bar),
+        showarrow=True, arrowhead=0, arrowcolor="#aaa",
+        font=dict(size=8, color="#aaa"), ax=0, ay=25,
     ))
 
     fig.update_layout(annotations=annotations, height=520,
@@ -333,160 +338,89 @@ def build_chart(chart_df, swings, legs, bar, show_swings=True, show_legs=True):
     return fig
 
 
-
 # =========================================================
-# 训练面板 — 围绕 5 个训练目标
+# 训练面板
 # =========================================================
-
-def render_skill_panel(materials, session, current_bar):
-    """核心训练面板：用户逐个完成 5 个判断"""
-
-    if not materials:
-        st.warning("没有足够的观察材料，请先移动到有数据的K线位置")
-        return
-
-    # 当前训练模式
+def render_training(session, bar):
     mode = session.get("train_mode", 1)
+    skill = SKILLS[mode]
 
     st.markdown("---")
-    st.markdown(f"**训练 {mode}/5: {SKILLS[mode]['name']}**")
-    st.markdown(f"*{SKILLS[mode]['question']}*")
+    st.markdown("### 训练 {}/5: {}".format(mode, skill["name"]))
+    st.markdown("*{}*".format(skill["question"]))
 
-    # 展示原始观察材料（用户需要的"原料"）
-    st.markdown("**观察材料：**")
-    render_materials(materials, mode)
+    answer = st.text_area(
+        "你的判断", height=80,
+        key="answer_{}_{}".format(bar, mode),
+        placeholder="直接写出你的观察和结论...",
+    )
 
-    st.markdown("")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        submitted = st.button("提交", key="submit_{}_{}".format(bar, mode))
+    with c2:
+        observe_clicked = st.button("AI: 我该看哪里？", key="obs_{}_{}".format(bar, mode))
+    with c3:
+        challenge_clicked = st.button("AI: 质疑我的判断", key="chal_{}_{}".format(bar, mode))
 
-    # 用户输入区域
-    if mode == 1:  # 背景阅读
-        col1, col2 = st.columns(2)
-        with col1:
-            structure = st.radio("市场结构", ["趋势（多）", "趋势（空）", "区间", "不确定"],
-                                key="s1_struct")
-        with col2:
-            key_level = st.text_input("关键价格位", placeholder="如: 前高3850, 前低3780",
-                                      key="s1_key")
-        user_answer = f"结构={structure}, 关键位={key_level}"
+    chart_df = session.get("chart_df")
+    swings = session.get("swings", [])
+    legs = session.get("legs", [])
+    context = extract_chart_context(chart_df, swings, legs, bar) if chart_df is not None else None
 
-    elif mode == 2:  # 控制权识别
-        control = st.radio("谁在控制？", ["多头控制", "空头控制", "争夺中", "不确定"],
-                           key="s2_ctrl")
-        reason = st.text_input("你的依据", key="s2_reason", placeholder="简洁描述依据")
-        user_answer = f"{control}, 依据: {reason}"
+    if submitted and answer.strip():
+        sa = SkillAnswer(
+            skill_id=mode, bar=bar,
+            answer=answer.strip(),
+            timestamp=datetime.now().strftime("%H:%M:%S"),
+        )
+        session.setdefault("answers", []).append(sa)
+        session["last_answer_{}".format(mode)] = answer.strip()
+        session["last_answer_bar_{}".format(mode)] = bar
+        st.success("已记录")
 
-    elif mode == 3:  # 推进质量
-        quality = st.radio("推进质量", ["强", "中等", "弱"], key="s3_qual")
-        detail = st.text_input("关键特征", key="s3_detail",
-                               placeholder="如: 实体饱满、连续阳线、无反包")
-        user_answer = f"质量={quality}, 特征: {detail}"
+    if observe_clicked and context:
+        with st.spinner("AI思考中..."):
+            result = ai_observe(context, skill["name"])
+        st.markdown("**AI教练：**\n{}".format(result))
 
-    elif mode == 4:  # 回调 vs 转换
-        judgment = st.radio("这是？", ["正常回调", "控制权转换", "不确定"], key="s4_judg")
-        evidence = st.text_input("证据", key="s4_evid",
-                                 placeholder="如: 回调浅、未破前低、快速恢复")
-        user_answer = f"{judgment}, 证据: {evidence}"
+    if challenge_clicked:
+        last_answer = session.get("last_answer_{}".format(mode), "")
+        if not last_answer:
+            st.warning("请先提交你的判断")
+        elif context:
+            with st.spinner("AI思考中..."):
+                result = ai_challenge(last_answer, context, skill["name"])
+            st.markdown("**AI教练：**\n{}".format(result))
 
-    elif mode == 5:  # 市场接受
-        accept = st.radio("市场态度", ["接受", "拒绝", "待观察"], key="s5_acc")
-        explain = st.text_input("你的观察", key="s5_exp",
-                                placeholder="如: 价格维持在新高位、后续K线确认")
-        user_answer = f"{accept}, 观察: {explain}"
-
-    col_submit, col_skip, col_next = st.columns(3)
-    with col_submit:
-        if st.button("提交判断", key="submit_skill"):
-            answer = SkillAnswer(
-                skill_id=mode, bar=current_bar, answer=user_answer,
-                timestamp=datetime.now().strftime("%H:%M:%S"),
-            )
-            session.setdefault("answers", []).append(answer)
-            session["last_submit"] = user_answer
-            st.success("已记录")
-    with col_skip:
-        if st.button("跳过", key="skip_skill"):
-            st.info("跳过此题")
-    with col_next:
-        if st.button("下一题 ->" if mode < 5 else "完成本轮", key="next_skill"):
-            session["train_mode"] = min(mode + 1, 5)
-            st.rerun()
-
-    # 显示上次提交
-    if "last_submit" in session:
-        st.caption(f"上次提交: {session['last_submit']}")
+    # 揭示后回顾
+    last_bar = session.get("last_answer_bar_{}".format(mode))
+    if last_bar is not None and bar > last_bar + 5:
+        last_answer = session.get("last_answer_{}".format(mode), "")
+        if last_answer:
+            st.markdown("---")
+            if st.button("AI: 回顾我之前的判断", key="reveal_{}".format(mode)):
+                if chart_df is not None:
+                    context_after = extract_chart_context(chart_df, swings, legs, bar)
+                    with st.spinner("AI思考中..."):
+                        result = ai_reveal(context_after, last_answer, skill["name"])
+                    st.markdown("**AI回顾：**\n{}".format(result))
 
 
-def render_materials(materials, mode):
-    """根据当前训练模式，展示相关的原始观察材料"""
-    col1, col2 = st.columns(2)
-
-    with col1:
-        # K线基础数据（所有模式都需要）
-        if "hc" in materials:
-            st.text(f"最近: HC={materials['hc']} LC={materials['lc']}")
-        if "cur_direction" in materials:
-            st.text(f"当前K线: {materials['cur_direction']}, 实体占比{materials.get('cur_body_pct', 0)}%")
-        if "price_position" in materials:
-            st.text(f"全局位置: {materials['price_position']}%")
-
-    with col2:
-        # 波段数据
-        if "last_leg" in materials:
-            ll = materials["last_leg"]
-            st.text(f"最近波段: {'多' if ll['direction']=='bull' else '空'} "
-                    f"{ll['bars']}根 范围{ll['range']}pt 实体{ll['body']}")
-        if "prev_leg" in materials:
-            pl = materials["prev_leg"]
-            st.text(f"前一波段: {'多' if pl['direction']=='bull' else '空'} "
-                    f"{pl['bars']}根 范围{pl['range']}pt")
-
-    # 额外材料（根据模式）
-    if mode == 1:
-        # 背景：需要 Swing 位置
-        if "last_swing" in materials:
-            ls = materials["last_swing"]
-            label = "高" if ls["kind"] == "SH" else "低"
-            st.text(f"最近Swing{label}: #{ls['index']} ({ls['price']})")
-        if "prev_swing" in materials:
-            ps = materials["prev_swing"]
-            label = "高" if ps["kind"] == "SH" else "低"
-            st.text(f"前一个Swing{label}: #{ps['index']} ({ps['price']})")
-
-    if mode in (3, 4, 5):
-        # 推进质量/回调/接受：需要回调比例
-        if "pullback_ratio" in materials:
-            st.text(f"回调/推进比: {materials['pullback_ratio']}x")
-        if "body_avg_first" in materials and "body_avg_second" in materials:
-            b1 = materials["body_avg_first"]
-            b2 = materials["body_avg_second"]
-            if b1 > 1e-9:
-                st.text(f"实体趋势: 前={b1:.2f} 后={b2:.2f} ({b2/b1:.1f}x)")
-
-
-def render_answer_history(session):
-    """展示训练记录"""
+def render_history(session):
     answers = session.get("answers", [])
     if not answers:
         return
-
-    st.markdown("---")
     with st.expander("训练记录"):
-        # 按技能统计
         by_skill = {}
         for a in answers:
             by_skill.setdefault(a.skill_id, []).append(a)
-
         for sid in sorted(by_skill.keys()):
-            skill_name = SKILLS[sid]["name"]
-            count = len(by_skill[sid])
-            st.text(f"[{skill_name}] {count} 次训练")
-
-        # 最近记录
-        st.markdown("**最近 10 条：**")
-        for a in answers[-10:]:
-            skill_name = SKILLS.get(a.skill_id, {}).get("name", "?")
-            st.text(f"[{a.timestamp}] #{a.bar} {skill_name}: {a.answer[:60]}")
-
+            name = SKILLS[sid]["name"]
+            st.text("[{}] {}次".format(name, len(by_skill[sid])))
+        for a in answers[-8:]:
+            name = SKILLS.get(a.skill_id, {}).get("name", "?")
+            st.text("[{}] #{} {}: {}".format(a.timestamp, a.bar, name, a.answer[:50]))
 
 
 # =========================================================
@@ -495,16 +429,14 @@ def render_answer_history(session):
 def main():
     st.set_page_config(page_title="Al Brooks 读盘训练器 V12", layout="wide")
 
-    # Session 初始化
     if "data_loaded" not in st.session_state:
         st.session_state["data_loaded"] = False
         st.session_state["answers"] = []
         st.session_state["train_mode"] = 1
 
-    # ---- 侧边栏 ----
     with st.sidebar:
         st.title("读盘训练器 V12")
-        st.caption("训练目标：背景阅读、控制权识别、推进质量、回调vs转换、市场接受")
+        st.caption("5个训练目标 | AI苏格拉底式教练 | Replay")
 
         symbol = st.text_input("合约代码", value="rb2510", key="sym")
         if st.button("加载数据", key="load"):
@@ -520,43 +452,40 @@ def main():
                     st.session_state["data_loaded"] = True
                     st.session_state["answers"] = []
                     st.session_state["train_mode"] = 1
-                    st.success(f"{len(df)}根K线, {len(new_legs)}个波段")
+                    for k in list(st.session_state.keys()):
+                        if k.startswith("last_answer"):
+                            del st.session_state[k]
+                    st.success("{}根K线, {}个波段".format(len(df), len(new_legs)))
                 else:
                     st.error("加载失败")
 
         if st.session_state.get("data_loaded"):
             st.markdown("---")
-            st.markdown("**训练模式选择：**")
+            st.markdown("**训练目标：**")
             for sid in range(1, 6):
                 name = SKILLS[sid]["name"]
-                if st.button(f"{sid}. {name}", key=f"mode_{sid}"):
+                is_active = st.session_state.get("train_mode") == sid
+                btn = ">> {}. {} <<".format(sid, name) if is_active else "{}. {}".format(sid, name)
+                if st.button(btn, key="mode_{}".format(sid)):
                     st.session_state["train_mode"] = sid
                     st.rerun()
 
-            # 训练统计
             answers = st.session_state.get("answers", [])
             st.markdown("---")
-            st.text(f"总训练次数: {len(answers)}")
-
-            # 标注控制
+            st.text("总训练: {}次".format(len(answers)))
             st.markdown("---")
-            st.markdown("**标注显示：**")
-            st.session_state["show_swings"] = st.checkbox(
-                "Swing High/Low", value=True, key="cb_swings")
-            st.session_state["show_legs"] = st.checkbox(
-                "波段", value=True, key="cb_legs")
+            st.markdown("**标注：**")
+            st.session_state["show_swings"] = st.checkbox("Swing", True, key="cb_sw")
+            st.session_state["show_legs"] = st.checkbox("波段", True, key="cb_lg")
 
-    # ---- 主区域 ----
     if not st.session_state.get("data_loaded"):
         st.markdown("# Al Brooks 读盘训练器 V12")
         st.markdown("")
-        st.markdown("## 训练目标")
         for sid in range(1, 6):
             s = SKILLS[sid]
-            st.markdown(f"**{sid}. {s['name']}** — {s['question']}")
+            st.markdown("**{}. {}** - {}".format(sid, s["name"], s["question"]))
         st.markdown("")
-        st.markdown("> 系统不给你答案。你观察、你判断、你记录。")
-        st.markdown("> 用 Replay 一根根推进，训练你的**读盘能力**。")
+        st.markdown("> 你看图，你判断。AI只提问，不给答案。")
         return
 
     chart_df = st.session_state["chart_df"]
@@ -568,57 +497,42 @@ def main():
         bar = len(chart_df) - 1
         st.session_state["current_bar"] = bar
 
-    # K 线图
     show_sw = st.session_state.get("show_swings", True)
     show_lg = st.session_state.get("show_legs", True)
     chart = build_chart(chart_df, swings, legs, bar, show_swings=show_sw, show_legs=show_lg)
     st.plotly_chart(chart, use_container_width=True)
 
-    # Replay 控制（核心交互）
-    col_p3, col_p1, col_n1, col_n3, col_n10, col_end = st.columns(6)
-    with col_p3:
-        if st.button("<<-3", key="b_p3"):
-            st.session_state["current_bar"] = max(0, bar - 3)
-            st.rerun()
-    with col_p1:
+    # Replay
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    with c1:
+        if st.button("<<-5", key="b_p5"):
+            st.session_state["current_bar"] = max(0, bar - 5); st.rerun()
+    with c2:
         if st.button("<-1", key="b_p1"):
-            st.session_state["current_bar"] = max(0, bar - 1)
-            st.rerun()
-    with col_n1:
+            st.session_state["current_bar"] = max(0, bar - 1); st.rerun()
+    with c3:
         if st.button("+1->", key="b_n1"):
-            st.session_state["current_bar"] = min(len(chart_df) - 1, bar + 1)
-            st.rerun()
-    with col_n3:
-        if st.button("+3->", key="b_n3"):
-            st.session_state["current_bar"] = min(len(chart_df) - 1, bar + 3)
-            st.rerun()
-    with col_n10:
-        if st.button("+10->", key="b_n10"):
-            st.session_state["current_bar"] = min(len(chart_df) - 1, bar + 10)
-            st.rerun()
-    with col_end:
+            st.session_state["current_bar"] = min(len(chart_df)-1, bar+1); st.rerun()
+    with c4:
+        if st.button("+5->", key="b_n5"):
+            st.session_state["current_bar"] = min(len(chart_df)-1, bar+5); st.rerun()
+    with c5:
+        if st.button("+15->", key="b_n15"):
+            st.session_state["current_bar"] = min(len(chart_df)-1, bar+15); st.rerun()
+    with c6:
         if st.button("末尾", key="b_end"):
-            st.session_state["current_bar"] = len(chart_df) - 1
-            st.rerun()
+            st.session_state["current_bar"] = len(chart_df)-1; st.rerun()
 
-    # 当前 bar 信息
     cur = chart_df.iloc[bar]
-    st.caption(
-        f"#{bar}/{len(chart_df)-1}  "
-        f"O:{cur['open']:.2f}  H:{cur['high']:.2f}  "
-        f"L:{cur['low']:.2f}  C:{cur['close']:.2f}  "
-        f"{cur['close']-cur['open']:+.2f}"
-    )
+    st.caption("#{}/{}  O:{:.1f}  H:{:.1f}  L:{:.1f}  C:{:.1f}  {:+.1f}".format(
+        bar, len(chart_df)-1, cur["open"], cur["high"], cur["low"], cur["close"],
+        cur["close"]-cur["open"]))
 
-    # 获取原始观察材料
-    materials = get_raw_materials(chart_df, swings, legs, bar)
-
-    # 训练面板
     col_train, col_hist = st.columns([2, 1])
     with col_train:
-        render_skill_panel(materials, st.session_state, bar)
+        render_training(st.session_state, bar)
     with col_hist:
-        render_answer_history(st.session_state)
+        render_history(st.session_state)
 
 
 if __name__ == "__main__":
