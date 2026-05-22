@@ -1376,7 +1376,7 @@ def main():
                     st.session_state["swings"] = detect_swings(df)
                     st.session_state["structure"] = detect_market_structure(
                         st.session_state["swings"])
-                    st.session_state["legs"] = detect_legs(df)
+                    st.session_state["legs"] = detect_legs(df, st.session_state["swings"])
                     st.session_state["current_bar"] = min(30, len(df) - 1)
                     st.session_state["viewpoints"] = []
                     st.session_state["timeline"] = []
