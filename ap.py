@@ -462,7 +462,8 @@ def detect_behavior_changes(chart_df: pd.DataFrame, legs: list) -> list:
             ))
     
     # 5. 波段对比（如果有足够的legs）
-    recent_legs = [l for l in legs if l.end_idx <= len(chart_df) - 1]
+    safe_legs = [l for l in legs if hasattr(l, 'end_idx')]
+    recent_legs = [l for l in safe_legs if l.end_idx <= len(chart_df) - 1]
     if len(recent_legs) >= 3:
         last3 = recent_legs[-3:]
         body_avgs = [l.body_avg for l in last3]
@@ -628,7 +629,8 @@ def detect_control_shift(
         return ControlShift(False, "无", False, "无", False, "无", 0, "数据不足")
     
     # 确定当前主导方向
-    last_leg = next((l for l in reversed(legs) if l.end_idx <= current_bar), None)
+    safe_legs = [l for l in legs if hasattr(l, 'end_idx')]
+    last_leg = next((l for l in reversed(safe_legs) if l.end_idx <= current_bar), None)
     if last_leg is None:
         return ControlShift(False, "无", False, "无", False, "无", 0, "无波段数据")
     
@@ -931,11 +933,11 @@ def build_snapshot(chart_df, swings, legs, current_bar, session):
     location_obs = observe_location(chart_df, swings, legs, current_bar)
     
     # 行为变化
-    behavior_changes = detect_behavior_changes(chart_df, swings, legs, current_bar)
+    behavior_changes = detect_behavior_changes(chart_df, swings, safe_legs, current_bar)
     bc_texts = [f"{bc.what} {bc.direction}: {bc.from_desc} → {bc.to_desc}" for bc in behavior_changes]
     
     # 衰减追踪
-    decay = track_decay(chart_df, swings, legs, current_bar)
+    decay = track_decay(chart_df, swings, safe_legs, current_bar)
     decay_texts = []
     if decay:
         max_decay = max(decay.body_shrinking, decay.hc_decreasing,
@@ -947,7 +949,7 @@ def build_snapshot(chart_df, swings, legs, current_bar, session):
                 decay_texts.append(f"  回调: {decay.pullback_deepening}")
     
     # 控制权转移
-    control_shift = detect_control_shift(chart_df, swings, legs, current_bar)
+    control_shift = detect_control_shift(chart_df, swings, safe_legs, current_bar)
     shift_texts = []
     if control_shift:
         shift_texts.append(f"控制权转移阶段: {control_shift.phase}")
@@ -956,7 +958,7 @@ def build_snapshot(chart_df, swings, legs, current_bar, session):
     
     # 波段信息
     leg_texts = []
-    recent_legs = [l for l in legs if l.end <= current_bar]
+    recent_legs = [l for l in safe_legs if l.end_idx <= current_bar]
     if recent_legs:
         last = recent_legs[-1]
         leg_texts.append(f"最近波段: {'多' if last.direction == 'bull' else '空'} #{last.start_idx}-{last.end_idx} ({last.price_range:.2f})")
@@ -1060,12 +1062,13 @@ def validate_outcome(chart_df, swings, legs, session, predict_bar, outcome_bar):
                 break
     
     # 控制权变化
-    shift = detect_control_shift(chart_df, swings, legs, outcome_bar)
+    safe_legs = [l for l in legs if hasattr(l, 'end_idx')]
+    shift = detect_control_shift(chart_df, swings, safe_legs, outcome_bar)
     if shift:
         path_obs.append(f"当前控制权阶段: {shift.phase}")
     
     # 衰减
-    decay = track_decay(chart_df, swings, legs, outcome_bar)
+    decay = track_decay(chart_df, swings, safe_legs, outcome_bar)
     max_decay = max(decay.body_shrinking, decay.hc_decreasing,
                    decay.tail_growing, decay.reversal_frequency)
     if max_decay >= 3:
