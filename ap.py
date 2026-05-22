@@ -225,7 +225,7 @@ def call_ai(user_message: str, skill_name: str, context: dict) -> str:
         full_prompt = "\n".join(parts)
 
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-5.4-nano",
             messages=[
                 {"role": "system", "content": AI_SYSTEM_PROMPT},
                 {"role": "user", "content": full_prompt},
