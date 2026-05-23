@@ -225,7 +225,7 @@ def call_ai(user_message: str, skill_name: str, context: dict) -> str:
     for attempt in range(max_retries):
         try:
             response = client.chat.completions.create(
-                model="gpt-5.4-nano",
+                model="gpt-5.4-mini",
                 messages=[
                     {"role": "system", "content": AI_SYSTEM_PROMPT},
                     {"role": "user", "content": full_prompt},
