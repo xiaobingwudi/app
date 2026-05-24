@@ -579,7 +579,7 @@ def render_timeline(session, bar):
             new_desc = st.text_input("记录变化", key="tl_{}".format(bar),
                 placeholder="描述这里的行为变化...")
         with c2:
-            etype = st.selectbox("类型", ["拐点", "观察"], key="tlt_{}_{}".format(bar))
+            etype = st.selectbox("类型", ["拐点", "观察"], key="tlt_{}".format(bar))
         if st.button("添加", key="tl_add_{}".format(bar)) and new_desc.strip():
             tl.append(TimelineEvent(bar=bar, description=new_desc.strip(),
                 event_type="inflection" if etype == "拐点" else "observe",
