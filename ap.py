@@ -70,58 +70,126 @@ AI_SYSTEM_PROMPT = """
 # 样式
 # =========================================================
 def _css():
-    st.markdown("""<style>
-/* 全局 */
-.main .block-container{padding-top:1.2rem!important;padding-bottom:1rem!important;padding-left:1rem!important;padding-right:1rem!important;max-width:100%!important}
-
-/* 侧栏 */
-[data-testid="stSidebar"]{width:220px!important;min-width:220px!important;background:#f7f8fa}
-[data-testid="stSidebar"] [data-testid="stVerticalBlock"]>div{padding-top:2px!important;padding-bottom:2px!important}
-[data-testid="stSidebar"] h1{font-size:1.1rem!important;margin:0!important}
-[data-testid="stSidebar"] .stCaption,[data-testid="stSidebar"] p{font-size:.88rem!important;line-height:1.3!important;margin:0!important}
-[data-testid="stSidebar"] .stTextInput>div>div>input{font-size:.88rem!important;padding:.15rem .4rem!important;height:30px!important}
-[data-testid="stSidebar"] .stRadio>div>label>div>span{font-size:.88rem!important}
-[data-testid="stSidebar"] .stRadio>div>label>p{font-size:.76rem!important}
-[data-testid="stSidebar"] .stMarkdown{font-size:.88rem!important;margin:0!important}
-[data-testid="stSidebar"] .stButton>button{font-size:.85rem!important;padding:.15rem .2rem!important;margin:0!important;height:28px!important;line-height:1!important}
-[data-testid="stSidebar"] hr{margin:4px 0!important}
-[data-testid="stSidebar"] .stCheckbox>label{font-size:.88rem!important}
-
-/* 全局按钮 */
-.stButton>button{border-radius:4px!important;font-size:.85rem!important;padding:.2rem .5rem!important;border:1px solid #d0d7e3!important;height:30px!important;line-height:1!important}
-.stButton>button:hover{border-color:#89b4fa!important}
-.stButton>button[data-testid="stBaseButton-primary"]{background:#89b4fa!important;color:#1e1e2e!important;border:none!important;font-weight:600}
-div[data-testid="stHorizontalBlock"]>div>div{gap:6px!important}
-
-/* 输入 */
-.stTextInput>div>div>input,.stTextArea>div>div>textarea{border-radius:4px!important;border:1px solid #d0d7e3!important;font-size:.9rem!important}
-
-/* 对话气泡 */
-.bu{background:#dce8ff;color:#1e1e2e;padding:5px 10px;border-radius:8px 8px 2px 8px;margin:2px 0;font-size:.88rem;max-width:98%;display:inline-block;font-weight:500;line-height:1.4}
-.bc{background:#f4f4f6;color:#313244;padding:5px 10px;border-radius:8px 8px 8px 2px;margin:2px 0;font-size:.88rem;max-width:98%;display:inline-block;border-left:3px solid #89b4fa;line-height:1.4}
-.lu{font-size:.65rem;color:#6c7086;margin:5px 0 0;font-weight:600}
-.lc{font-size:.65rem;color:#89b4fa;margin:5px 0 0;font-weight:600}
-.ds{font-size:.65rem;color:#9399b2;text-align:right;margin-top:4px}
-
-/* Expander */
-.streamlit-expanderHeader{font-size:.85rem!important;font-weight:600!important}
-
-/* OHLC */
-.ohlc{font-size:.82rem;color:#6c7086;font-weight:600}
-.ohlc b{color:#313244}
-.ohlc .up{color:#27ae60}
-.ohlc .dn{color:#e74c3c}
-
-/* 标签 */
-.stag{display:inline-block;background:#eef2ff;color:#4a6fa5;padding:2px 10px;border-radius:10px;font-size:.88rem;font-weight:600}
-.sq{font-size:.82rem;color:#6c7086;margin-left:6px}
-
-/* Plotly全宽 */
-.js-plotly-plot .plotly .modebar{top:2px!important}
-
-/* tab字体 */
-.stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p{font-size:.88rem!important}
-</style>""", unsafe_allow_html=True)
+    st.markdown("""
+    <style>
+    /* 全局重置与字体优化 */
+    html, body, [class*="css"] { 
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        scrollbar-width: thin;
+    }
+    
+    /* 容器宽度最大化 */
+    .main .block-container {
+        max-width: 100% !important;
+        padding-top: 1rem !important;
+        padding-right: 1rem !important;
+        padding-left: 1rem !important;
+    }
+    
+    /* 侧边栏优化 */
+    [data-testid="stSidebar"] {
+        width: 260px !important;
+        min-width: 260px !important;
+        background: linear-gradient(135deg, #1f1f1f 0%, #1a1a1a 100%);
+        box-shadow: 2px 0 8px rgba(0,0,0,0.2);
+    }
+    
+    [data-testid="stSidebar"] .css-1d39gos {
+        padding-top: 1rem !important;
+        padding-bottom: 1rem !important;
+    }
+    
+    /* 侧边栏标题与文本 */
+    [data-testid="stSidebar"] h1 {
+        font-size: 1.3rem !important;
+        font-weight: 700 !important;
+        color: #ffffff;
+        margin-bottom: 1rem !important;
+    }
+    
+    [data-testid="stSidebar"] .stCaption,
+    [data-testid="stSidebar"] p,
+    [data-testid="stSidebar"] label {
+        color: #b0b0b0 !important;
+        font-size: 0.88rem !important;
+    }
+    
+    /* 输入框与按钮优化 */
+    [data-testid="stSidebar"] .stTextInput > div > div > input,
+    [data-testid="stSidebar"] .stTextArea > div > div > textarea {
+        border-radius: 8px !important;
+        border: 1px solid #3a3a3a !important;
+        background-color: #2a2a2a !important;
+        color: #ffffff !important;
+        font-size: 0.9rem !important;
+    }
+    
+    [data-testid="stSidebar"] .stButton > button {
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+        letter-spacing: 0.5px !important;
+        margin: 4px 0 !important;
+        height: 40px !important;
+    }
+    
+    /* 主按钮主题色（Al Brooks 风格红） */
+    .stButton > button[data-testid="stBaseButton-primary"] {
+        background-color: #c0392b !important;
+        color: #ffffff !important;
+        border: none !important;
+        font-weight: 700 !important;
+    }
+    
+    .stButton > button[data-testid="stBaseButton-primary"]:hover {
+        background-color: #a03023 !important;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 8px rgba(192, 57, 43, 0.3);
+    }
+    
+    /* 对话气泡美化 */
+    .bu, .bc {
+        border-radius: 12px !important;
+        padding: 12px 16px !important;
+        font-size: 0.9rem !important;
+        line-height: 1.5 !important;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .bu {
+        background: #e3f2fd;
+        color: #0d47a1;
+        border-bottom-right-radius: 4px !important;
+    }
+    
+    .bc {
+        background: #f0f0f0;
+        color: #333333;
+        border-bottom-left-radius: 4px !important;
+    }
+    
+    /* OHLC 信息栏 */
+    .ohlc {
+        font-size: 1rem !important;
+        font-weight: 700 !important;
+        letter-spacing: 0.5px;
+    }
+    
+    .ohlc .up { color: #27ae60; }
+    .ohlc .dn { color: #e74c3c; }
+    
+    /* 选项卡样式 */
+    .streamlit-expanderHeader {
+        font-size: 1rem !important;
+        font-weight: 600 !important;
+        color: #333333;
+    }
+    
+    /* Plotly 图表容器 */
+    .js-plotly-plot .plotly .modebar {
+        display: none !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
 # =========================================================
 # 数据类
@@ -371,16 +439,26 @@ def main():
 
     # ===== 图表（全宽）=====
     chart = build_chart(chart_df, bar, swings)
-    st.plotly_chart(chart, use_container_width=True)
+    st.plotly_chart(
+    chart, 
+    use_container_width=True, 
+    config={'displayModeBar': False},
+    key="main_chart"
+)
 
     # ===== OHLC + Slider + 导航（一行）=====
     cur = chart_df.iloc[bar]
     chg = cur["close"] - cur["open"]
     cc = "up" if chg >= 0 else "dn"
     ohlc = (
-        '<span class="ohlc">K<b>{}</b> &nbsp; O<b>{:.0f}</b> &nbsp; '
-        'H<b>{:.0f}</b> &nbsp; L<b>{:.0f}</b> &nbsp; C<b>{:.0f}</b> &nbsp; '
-        '<span class="{}">{:+.0f}</span></span>'
+        '<span class="ohlc">'
+        '<b>K{}</b> | '
+        'O<b>{:.0f}</b> '
+        'H<b>{:.0g}</b> '
+        'L<b>{:.0f}</b> '
+        'C<b>{:.0f}</b> '
+        '<span class="{}">{:+.0f}</span>'
+        '</span>'
     ).format(bar, cur["open"], cur["high"], cur["low"], cur["close"], cc, chg)
 
     c_info, c_sl, c_nav = st.columns([2, 4, 2], vertical_alignment="center")
