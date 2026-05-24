@@ -292,21 +292,19 @@ class SwingPoint:
 # =========================================================
 # 数据加载
 # =========================================================
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
 def _fetch_raw(symbol):
-    for _ in range(3):
-        try:
-            df = ak.futures_zh_minute_sina(symbol=symbol, period="30")
-            df = df.rename(columns={"datetime":"datetime","open":"open","high":"high","low":"low","close":"close"})
-            df = df.reset_index(drop=True)
-            df["datetime"] = pd.to_datetime(df["datetime"])
-            for c in ["open","high","low","close"]:
-                df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
-            df = df.dropna(subset=["open","high","low","close"])
-            return df.reset_index(drop=True)
-        except Exception:
-            time.sleep(1)
-    return pd.DataFrame()
+    try:
+        df = ak.futures_zh_minute_sina(symbol=symbol, period="30")
+        df = df.rename(columns={"datetime":"datetime","open":"open","high":"high","low":"low","close":"close"})
+        df = df.reset_index(drop=True)
+        df["datetime"] = pd.to_datetime(df["datetime"])
+        for c in ["open","high","low","close"]:
+            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+        df = df.dropna(subset=["open","high","low","close"])
+        return df.reset_index(drop=True)
+    except Exception:
+        return pd.DataFrame()
 
 def load_data(symbol, seed=None):
     raw = _fetch_raw(symbol)
@@ -721,6 +719,11 @@ def _do_contra(chart_df, bar, skill):
 
 def _load_all_main_contracts(mc):
     import akshare as ak
+    ex_map = {"shfe": list(SYMBOL_NAMES.keys()),
+              "dce": list(SYMBOL_NAMES.keys()),
+              "czce": list(SYMBOL_NAMES.keys()),
+              "cffex": list(SYMBOL_NAMES.keys()),
+              "gfex": list(SYMBOL_NAMES.keys())}
     for ex in ["shfe", "dce", "czce", "cffex", "gfex"]:
         try:
             result = ak.match_main_contract(symbol=ex)
@@ -734,7 +737,6 @@ def _load_all_main_contracts(mc):
                     mc[code] = c
         except Exception:
             pass
-        time.sleep(0.3)
 
 def _do_load(sym_code, sym_main):
     with st.spinner("\u52a0\u8f7d\u4e2d..."):
