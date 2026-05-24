@@ -78,10 +78,7 @@ def _css():
     /* 全局重置与字体优化 */
     html, body, [class*="css"] { 
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-        scrollbar-width: none;
-    }
-    .main::-webkit-scrollbar, [data-testid="stSidebar"]::-webkit-scrollbar {
-        width: 0 !important;
+        scrollbar-width: thin;
     }
     
     /* 侧边栏 */
@@ -195,7 +192,8 @@ def _css():
     /* --- 图表容器强化 --- */
     .main .block-container {
         max-width: 100% !important;
-        padding-top: 0.3rem !important;
+        padding-top: 0.2rem !important;
+        padding-bottom: 0.2rem !important;
         padding-right: 0.5rem !important;
         padding-left: 0.5rem !important;
         display: flex;
@@ -337,7 +335,7 @@ def build_chart(chart_df, bar, swings):
                      xanchor="center", yshift=-12 if chart_df.iloc[idx]["close"] >= chart_df.iloc[idx]["open"] else 12)
                 for idx in range(0, bar + 1, 5)]
     ann.extend(bar_nums)
-    fig.update_layout(annotations=ann, height=400,
+    fig.update_layout(annotations=ann, height=420,
         margin=dict(l=40, r=60, t=10, b=5),
         xaxis_rangeslider_visible=False,
         xaxis=dict(showgrid=False, zeroline=False, tickfont=dict(size=10), showticklabels=False),
