@@ -2,14 +2,6 @@
 # =========================================================
 # 认知训练工程 — 不是软件工程
 # 用户 = 训练者 | GPT = 教练 | 软件 = 训练场
-#
-# V16 核心变更：
-# - 教练连续对话链（多轮追问直到回到K线行为）
-# - 删除Swing/Leg检测、规则化能力画像、行为1/2/3
-# - "判断"→"观察"（消除结论诱导）
-# - 布局：左80%图表 + 右20%对话
-# - 训练结束GPT总结（替代规则检测）
-# - 时间轴简化为纯文本记录
 # =========================================================
 
 import json
@@ -29,6 +21,7 @@ from openai import OpenAI
 # 常量
 # =========================================================
 CHUNK_SIZE = 300
+SWING_LOOKBACK = 3
 
 SKILLS = {
     1: {"name": "背景阅读",   "question": "当前市场背景是什么？"},
@@ -230,6 +223,98 @@ AI_SYSTEM_PROMPT = """
 """
 
 # =========================================================
+# 样式注入
+# =========================================================
+def _inject_css():
+    st.markdown("""<style>
+/* 全局 */
+.block-container { padding-top: 1.5rem !important; padding-bottom: 2rem !important; }
+div[data-testid="stSidebar"] { background: #1e1e2e; }
+div[data-testid="stSidebar"] * { color: #cdd6f4 !important; }
+section[data-testid="stSidebar"] > div { padding-top: 1rem; }
+
+/* 标题 */
+h1 { font-size: 1.6rem !important; font-weight: 700 !important; color: #1e1e2e !important; }
+h2 { font-size: 1.2rem !important; font-weight: 600 !important; color: #313244 !important; }
+h3 { font-size: 1.05rem !important; font-weight: 600 !important; }
+
+/* 按钮 */
+.stButton > button {
+    border-radius: 8px !important;
+    border: 1px solid #bac2de !important;
+    font-size: 0.85rem !important;
+    padding: 0.25rem 0.75rem !important;
+    transition: all 0.15s ease;
+}
+.stButton > button:hover {
+    border-color: #89b4fa !important;
+    box-shadow: 0 0 0 2px rgba(137,180,250,0.15);
+}
+
+/* 主按钮 */
+.stButton > button[data-testid="stBaseButton-primary"] {
+    background: #89b4fa !important;
+    color: #1e1e2e !important;
+    border: none !important;
+    font-weight: 600;
+}
+.stButton > button[data-testid="stBaseButton-primary"]:hover {
+    background: #74c7ec !important;
+}
+
+/* 输入框 */
+.stTextInput > div > div > input {
+    border-radius: 8px !important;
+    border: 1px solid #bac2de !important;
+}
+.stTextArea > div > div > textarea {
+    border-radius: 8px !important;
+    border: 1px solid #bac2de !important;
+}
+
+/* 对话气泡 */
+.chat-user {
+    background: #89b4fa;
+    color: #1e1e2e;
+    padding: 10px 14px;
+    border-radius: 12px 12px 4px 12px;
+    margin: 4px 0;
+    font-size: 0.9rem;
+    max-width: 95%;
+    display: inline-block;
+    font-weight: 500;
+}
+.chat-coach {
+    background: #f5f5f5;
+    color: #313244;
+    padding: 10px 14px;
+    border-radius: 12px 12px 12px 4px;
+    margin: 4px 0;
+    font-size: 0.9rem;
+    max-width: 95%;
+    display: inline-block;
+    border-left: 3px solid #89b4fa;
+}
+.chat-label {
+    font-size: 0.75rem;
+    color: #6c7086;
+    margin: 8px 0 2px 0;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+}
+
+/* Slider */
+.stSlider > div > div > div { color: #89b4fa !important; }
+
+/* Expander */
+.streamlit-expanderHeader { font-weight: 600 !important; font-size: 0.9rem !important; }
+
+/* 侧栏标题 */
+div[data-testid="stSidebar"] h1 { color: #cdd6f4 !important; font-size: 1.3rem !important; }
+div[data-testid="stSidebar"] .stRadio label { font-size: 0.85rem !important; }
+</style>""", unsafe_allow_html=True)
+
+# =========================================================
 # 数据类
 # =========================================================
 @dataclass
@@ -244,6 +329,12 @@ class TimelineEvent:
     bar: int
     text: str
     timestamp: str
+
+@dataclass
+class SwingPoint:
+    index: int
+    kind: str   # "SH" or "SL"
+    price: float
 
 # =========================================================
 # 数据加载
@@ -279,29 +370,69 @@ def load_data(symbol, seed=None):
     return raw.iloc[start:start + CHUNK_SIZE].reset_index(drop=True)
 
 # =========================================================
-# 图表（极简：只有K线）
+# Swing 检测（仅用于图表标注）
 # =========================================================
-def build_chart(chart_df, bar):
+def detect_swings(df):
+    N = SWING_LOOKBACK
+    swings = []
+    highs, lows = df["high"].values, df["low"].values
+    for i in range(N, len(df) - N):
+        if all(highs[i] > highs[j] for j in range(i - N, i + N + 1) if j != i):
+            swings.append(SwingPoint(index=i, kind="SH", price=float(highs[i])))
+        if all(lows[i] < lows[j] for j in range(i - N, i + N + 1) if j != i):
+            swings.append(SwingPoint(index=i, kind="SL", price=float(lows[i])))
+    return swings
+
+# =========================================================
+# 图表
+# =========================================================
+def build_chart(chart_df, bar, swings):
     fig = go.Figure()
     vis = chart_df.iloc[:bar + 1]
     if len(vis) == 0:
         return fig
+
     fig.add_trace(go.Candlestick(
         x=vis.index, open=vis["open"], high=vis["high"],
         low=vis["low"], close=vis["close"],
         increasing_line_color="#e74c3c", decreasing_line_color="#2ecc71"))
+
+    annotations = []
+
+    # SH/SL 标注 + 价格
+    for s in swings:
+        if s.index <= bar:
+            is_sh = s.kind == "SH"
+            color = "#c0392b" if is_sh else "#27ae60"
+            symbol = "\u25b2" if is_sh else "\u25bc"
+            annotations.append(dict(
+                x=s.index, y=s.price,
+                text="{} {:.0f}".format(symbol, s.price),
+                showarrow=False,
+                font=dict(size=9, color=color),
+                xanchor="center",
+                yshift=14 if is_sh else -14,
+            ))
+
+    # 当前K线编号
     cur = chart_df.iloc[bar]
+    annotations.append(dict(
+        x=bar, y=cur["high"],
+        text="#{}".format(bar),
+        showarrow=True, arrowhead=0, arrowcolor="#9399b2",
+        font=dict(size=9, color="#6c7086"), ax=0, ay=28))
+
     fig.update_layout(
-        annotations=[dict(
-            x=bar, y=cur["high"], text="#{}".format(bar),
-            showarrow=True, arrowhead=0, arrowcolor="#aaa",
-            font=dict(size=8, color="#aaa"), ax=0, ay=25)],
-        height=500,
-        margin=dict(l=10, r=10, t=10, b=10),
+        annotations=annotations,
+        height=480,
+        margin=dict(l=20, r=20, t=15, b=5),
         xaxis_rangeslider_visible=False,
-        xaxis=dict(showgrid=False, zeroline=False),
-        yaxis=dict(showgrid=True, gridcolor="#f0f0f0", zeroline=False),
+        xaxis=dict(showgrid=False, zeroline=False, tickfont=dict(size=10)),
+        yaxis=dict(showgrid=True, gridcolor="#eff1f5", zeroline=False,
+                   tickfont=dict(size=10), side="right",
+                   title_text="", title_font=dict(size=10)),
         template="plotly_white",
+        font=dict(family="system-ui, sans-serif"),
     )
     return fig
 
@@ -328,10 +459,26 @@ def _build_market_msg(chart_df, bar, skill_name):
     }, ensure_ascii=False)
 
 
-def ask_coach(chart_df, bar, skill_name, dialogue, extra=None):
+def _call_gpt(messages):
     api_key = st.secrets["OPENAI_API_KEY"]
     client = OpenAI(api_key=api_key, base_url="https://api.videocaptioner.cn/v1")
+    for attempt in range(3):
+        try:
+            resp = client.chat.completions.create(
+                model="gpt-5.4-nano",
+                messages=messages,
+                temperature=0.4,
+                max_tokens=400,
+            )
+            return resp.choices[0].message.content.strip()
+        except Exception as e:
+            if attempt < 2 and "429" in str(e):
+                time.sleep(2 ** (attempt + 1))
+                continue
+            return "AI\u8c03\u7528\u5931\u8d25: {}".format(e)
 
+
+def ask_coach(chart_df, bar, skill_name, dialogue, extra=None):
     messages = [
         {"role": "system", "content": AI_SYSTEM_PROMPT},
         {"role": "user", "content": _build_market_msg(chart_df, bar, skill_name)},
@@ -340,97 +487,49 @@ def ask_coach(chart_df, bar, skill_name, dialogue, extra=None):
         messages.append({"role": msg["role"], "content": msg["content"]})
     if extra:
         messages.append({"role": "user", "content": extra})
-
-    for attempt in range(3):
-        try:
-            resp = client.chat.completions.create(
-                model="gpt-5.4-nano",
-                messages=messages,
-                temperature=0.4,
-                max_tokens=400,
-            )
-            return resp.choices[0].message.content.strip()
-        except Exception as e:
-            if attempt < 2 and "429" in str(e):
-                time.sleep(2 ** (attempt + 1))
-                continue
-            return "AI调用失败: {}".format(e)
+    return _call_gpt(messages)
 
 
 def ask_summary(chart_df, observations, dialogue):
-    api_key = st.secrets["OPENAI_API_KEY"]
-    client = OpenAI(api_key=api_key, base_url="https://api.videocaptioner.cn/v1")
-
-    obs_text = "\n".join(
-        "[K{}] {}".format(o.bar, o.text) for o in observations)
+    obs_text = "\n".join("[K{}] {}".format(o.bar, o.text) for o in observations)
     dlg_text = "\n".join(
-        "{}: {}".format(
-            "用户" if m["role"] == "user" else "教练", m["content"])
+        "{}: {}".format("\u7528\u6237" if m["role"] == "user" else "\u6559\u7ec3", m["content"])
         for m in dialogue[-20:])
-
     prompt = (
-        "以下是用户本次训练的全部观察和教练对话。\n\n"
-        "【观察记录】\n{}\n\n"
-        "【教练对话】\n{}\n\n"
-        "请分析用户的读盘能力，输出：\n"
-        "1. 用户长期问题（具体到行为层面）\n"
-        "2. 习惯性错误（引用对话中的实际表现）\n"
-        "3. 下一阶段训练重点\n\n"
-        "基于对话中的实际表现分析，不要泛泛而谈。"
+        "\u4ee5\u4e0b\u662f\u7528\u6237\u672c\u6b21\u8bad\u7ec3\u7684\u5168\u90e8\u89c2\u5bdf\u548c\u6559\u7ec3\u5bf9\u8bdd\u3002\n\n"
+        "\u3010\u89c2\u5bdf\u8bb0\u5f55\u3011\n{}\n\n"
+        "\u3010\u6559\u7ec3\u5bf9\u8bdd\u3011\n{}\n\n"
+        "\u8bf7\u5206\u6790\u7528\u6237\u7684\u8bfb\u76d8\u80fd\u529b\uff0c\u8f93\u51fa\uff1a\n"
+        "1. \u7528\u6237\u957f\u671f\u95ee\u9898\uff08\u5177\u4f53\u5230\u884c\u4e3a\u5c42\u9762\uff09\n"
+        "2. \u4e60\u60ef\u6027\u9519\u8bef\uff08\u5f15\u7528\u5bf9\u8bdd\u4e2d\u7684\u5b9e\u9645\u8868\u73b0\uff09\n"
+        "3. \u4e0b\u4e00\u9636\u6bb5\u8bad\u7ec3\u91cd\u70b9\n\n"
+        "\u57fa\u4e8e\u5bf9\u8bdd\u4e2d\u7684\u5b9e\u9645\u8868\u73b0\u5206\u6790\uff0c\u4e0d\u8981\u6cdb\u6cdb\u800c\u8c08\u3002"
     ).format(obs_text, dlg_text)
-
-    try:
-        resp = client.chat.completions.create(
-            model="gpt-5.4-nano",
-            messages=[
-                {"role": "system", "content": AI_SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.4,
-            max_tokens=600,
-        )
-        return resp.choices[0].message.content.strip()
-    except Exception as e:
-        return "总结生成失败: {}".format(e)
+    return _call_gpt([
+        {"role": "system", "content": AI_SYSTEM_PROMPT},
+        {"role": "user", "content": prompt},
+    ])
 
 
 def ask_memory_test(chart_df, bar, observations):
-    api_key = st.secrets["OPENAI_API_KEY"]
-    client = OpenAI(api_key=api_key, base_url="https://api.videocaptioner.cn/v1")
-
     market = _build_market_msg(chart_df, bar, "")
-    obs_text = "\n".join(
-        "[K{}] {}".format(o.bar, o.text) for o in observations[-10:])
-
+    obs_text = "\n".join("[K{}] {}".format(o.bar, o.text) for o in observations[-10:])
     prompt = (
-        "这是一次延迟记忆训练。\n\n"
-        "当前盘面：\n{}\n\n"
-        "用户的观察记录：\n{}\n\n"
-        "请根据用户的观察记录，出1-2个记忆测试问题：\n"
-        "测试用户是否记得之前观察到的具体行为变化。\n"
-        "只问问题，不给出答案。\n"
-        "问题要具体到K线行为，不要问抽象概念。"
+        "\u8fd9\u662f\u4e00\u6b21\u5ef6\u8fdf\u8bb0\u5fc6\u8bad\u7ec3\u3002\n\n"
+        "\u5f53\u524d\u76d8\u9762\uff1a\n{}\n\n"
+        "\u7528\u6237\u7684\u89c2\u5bdf\u8bb0\u5f55\uff1a\n{}\n\n"
+        "\u8bf7\u6839\u636e\u7528\u6237\u7684\u89c2\u5bdf\u8bb0\u5f55\uff0c\u51fa1-2\u4e2a\u8bb0\u5fc6\u6d4b\u8bd5\u95ee\u9898\uff1a\n"
+        "\u6d4b\u8bd5\u7528\u6237\u662f\u5426\u8bb0\u5f97\u4e4b\u524d\u89c2\u5bdf\u5230\u7684\u5177\u4f53\u884c\u4e3a\u53d8\u5316\u3002\n"
+        "\u53ea\u95ee\u95ee\u9898\uff0c\u4e0d\u7ed9\u51fa\u7b54\u6848\u3002\n"
+        "\u95ee\u9898\u8981\u5177\u4f53\u5230K\u7ebf\u884c\u4e3a\uff0c\u4e0d\u8981\u95ee\u62bd\u8c61\u6982\u5ff5\u3002"
     ).format(market, obs_text)
-
-    try:
-        resp = client.chat.completions.create(
-            model="gpt-5.4-nano",
-            messages=[
-                {"role": "system", "content": AI_SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.4,
-            max_tokens=400,
-        )
-        return resp.choices[0].message.content.strip()
-    except Exception as e:
-        return "AI调用失败: {}".format(e)
+    return _call_gpt([
+        {"role": "system", "content": AI_SYSTEM_PROMPT},
+        {"role": "user", "content": prompt},
+    ])
 
 
 def ask_contradiction(chart_df, bar, skill_name, dialogue):
-    api_key = st.secrets["OPENAI_API_KEY"]
-    client = OpenAI(api_key=api_key, base_url="https://api.videocaptioner.cn/v1")
-
     messages = [
         {"role": "system", "content": AI_SYSTEM_PROMPT},
         {"role": "user", "content": _build_market_msg(chart_df, bar, skill_name)},
@@ -438,257 +537,252 @@ def ask_contradiction(chart_df, bar, skill_name, dialogue):
     for msg in dialogue:
         messages.append({"role": msg["role"], "content": msg["content"]})
     messages.append({"role": "user", "content": (
-        "请找出用户观察中的矛盾之处。\n"
-        "用户之前说了一些观察，现在盘面已经变化。\n"
-        "指出用户观察与实际K线行为之间的矛盾。\n"
-        "不要直接告诉答案，用提问的方式让用户自己发现矛盾。"
+        "\u8bf7\u627e\u51fa\u7528\u6237\u89c2\u5bdf\u4e2d\u7684\u77db\u76fe\u4e4b\u5904\u3002\n"
+        "\u7528\u6237\u4e4b\u524d\u8bf4\u4e86\u4e00\u4e9b\u89c2\u5bdf\uff0c\u73b0\u5728\u76d8\u9762\u5df2\u7ecf\u53d8\u5316\u3002\n"
+        "\u6307\u51fa\u7528\u6237\u89c2\u5bdf\u4e0e\u5b9e\u9645K\u7ebf\u884c\u4e3a\u4e4b\u95f4\u7684\u77db\u76fe\u3002\n"
+        "\u4e0d\u8981\u76f4\u63a5\u544a\u8bc9\u7b54\u6848\uff0c\u7528\u63d0\u95ee\u7684\u65b9\u5f0f\u8ba9\u7528\u6237\u81ea\u5df1\u53d1\u73b0\u77db\u76fe\u3002"
     )})
+    return _call_gpt(messages)
 
-    for attempt in range(3):
-        try:
-            resp = client.chat.completions.create(
-                model="gpt-5.4-nano",
-                messages=messages,
-                temperature=0.4,
-                max_tokens=400,
-            )
-            return resp.choices[0].message.content.strip()
-        except Exception as e:
-            if attempt < 2 and "429" in str(e):
-                time.sleep(2 ** (attempt + 1))
-                continue
-            return "AI调用失败: {}".format(e)
+# =========================================================
+# 对话气泡渲染
+# =========================================================
+def _render_bubble(role, content):
+    label = "\u4f60" if role == "user" else "\u6559\u7ec3"
+    cls = "chat-user" if role == "user" else "chat-coach"
+    safe = content.replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+    st.markdown(
+        '<div class="chat-label">{}</div>'
+        '<div class="{}">{}</div>'.format(label, cls, safe),
+        unsafe_allow_html=True)
 
 # =========================================================
 # 主程序
 # =========================================================
 def main():
+    _inject_css()
+
     for key, default in [
         ("data_loaded", False), ("observations", []),
         ("train_mode", 1), ("timeline", []),
-        ("replay_mode", "复盘模式"), ("coach_dialogue", []),
+        ("replay_mode", "\u590d\u76d8\u6a21\u5f0f"), ("coach_dialogue", []),
         ("send_counter", 0), ("training_summary", ""),
     ]:
         if key not in st.session_state:
             st.session_state[key] = default
 
-    # ---- 侧栏 ----
+    # ===== 侧栏 =====
     with st.sidebar:
-        st.title("读盘训练器 V16")
-        st.caption("认知训练工程")
+        st.title("\u8bfb\u76d8\u8bad\u7ec3\u5668")
+        st.caption("V16 \u00b7 \u8ba4\u77e5\u8bad\u7ec3\u5de5\u7a0b")
 
-        symbol = st.text_input("合约代码", value="rb2510", key="sym")
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("加载", key="load", use_container_width=True):
+        symbol = st.text_input(
+            "\u5408\u7ea6\u4ee3\u7801", value="rb2510", key="sym")
+        sc = st.columns(2)
+        with sc[0]:
+            if st.button("\u52a0\u8f7d", key="load", use_container_width=True):
                 _do_load(symbol)
-        with c2:
-            if st.button("换一段", key="rand", use_container_width=True):
+        with sc[1]:
+            if st.button("\u6362\u4e00\u6bb5", key="rand", use_container_width=True):
                 _do_load(symbol)
 
         if st.session_state.get("data_loaded"):
             st.markdown("---")
             st.session_state["replay_mode"] = st.radio(
-                "Replay", ["复盘模式", "严格模式"], key="rm_radio")
-
+                "Replay \u6a21\u5f0f",
+                ["\u590d\u76d8\u6a21\u5f0f", "\u4e25\u683c\u6a21\u5f0f"],
+                key="rm_radio",
+                captions=["\u53ef\u56de\u9000\u3001\u5feb\u8fdb", "\u53ea\u80fd +1"],
+            )
             st.markdown("---")
-            st.markdown("**训练目标**")
+            st.markdown("**\u8bad\u7ec3\u76ee\u6807**")
             for sid in range(1, 6):
                 name = SKILLS[sid]["name"]
                 active = st.session_state.get("train_mode") == sid
-                prefix = "▶ " if active else "  "
+                prefix = "\u25b6 " if active else "  "
                 if st.button(
                     "{}{}. {}".format(prefix, sid, name),
-                    key="mode_{}".format(sid),
-                    use_container_width=True,
+                    key="mode_{}".format(sid), use_container_width=True,
                 ):
                     st.session_state["train_mode"] = sid
                     st.rerun()
 
             st.markdown("---")
             if st.button(
-                "结束训练 → 总结", key="end_train",
-                use_container_width=True, type="primary"):
+                "\u7ed3\u675f\u8bad\u7ec3 \u2192 \u603b\u7ed3",
+                key="end_train", use_container_width=True, type="primary",
+            ):
                 _do_summary()
-                st.stop()
 
             obs_n = len(st.session_state.get("observations", []))
             dlg_n = len(st.session_state.get("coach_dialogue", [])) // 2
-            st.caption("观察: {}次 | 对话: {}轮".format(obs_n, dlg_n))
+            st.caption("\u89c2\u5bdf {} \u6b21  |  \u5bf9\u8bdd {} \u8f6e".format(obs_n, dlg_n))
 
-    # ---- 欢迎页 ----
+    # ===== 欢迎页 =====
     if not st.session_state.get("data_loaded"):
-        st.markdown("# Al Brooks 读盘训练器")
+        st.markdown("# Al Brooks \u8bfb\u76d8\u8bad\u7ec3\u5668")
         st.markdown("")
         for sid in range(1, 6):
             s = SKILLS[sid]
-            st.markdown("**{}. {}** — {}".format(
-                sid, s["name"], s["question"]))
+            st.markdown("**{}. {}** \u2014 {}".format(sid, s["name"], s["question"]))
         st.markdown("")
-        st.markdown("> 你看图。你观察。教练只提问，不给答案。")
+        st.markdown("> \u4f60\u770b\u56fe\u3002\u4f60\u89c2\u5bdf\u3002\u6559\u7ec3\u53ea\u63d0\u95ee\uff0c\u4e0d\u7ed9\u7b54\u6848\u3002")
         st.markdown("")
-        st.markdown("**训练架构：**")
-        st.markdown("- 用户 = 真正训练者")
-        st.markdown("- GPT = 教练（与你看同一个盘面）")
-        st.markdown("- 软件 = 训练场")
+        st.markdown("**\u8bad\u7ec3\u67b6\u6784\uff1a**")
+        st.markdown("- \u7528\u6237 = \u771f\u6b63\u8bad\u7ec3\u8005")
+        st.markdown("- GPT = \u6559\u7ec3\uff08\u4e0e\u4f60\u770b\u540c\u4e00\u4e2a\u76d8\u9762\uff09")
+        st.markdown("- \u8f6f\u4ef6 = \u8bad\u7ec3\u573a")
         return
 
-    # ---- 训练总结页 ----
+    # ===== 训练总结页 =====
     if st.session_state.get("training_summary"):
-        st.markdown("## 训练总结")
+        st.markdown("## \u8bad\u7ec3\u603b\u7ed3")
         st.markdown(st.session_state["training_summary"])
-        if st.button("继续训练", key="resume"):
+        if st.button("\u7ee7\u7eed\u8bad\u7ec3", key="resume"):
             st.session_state["training_summary"] = ""
             st.rerun()
         return
 
-    # ---- 主布局 ----
+    # ===== 主布局 =====
     chart_df = st.session_state["chart_df"]
     bar = st.session_state.get("current_bar", 0)
     if bar >= len(chart_df):
         bar = len(chart_df) - 1
         st.session_state["current_bar"] = bar
 
+    swings = st.session_state.get("swings", [])
     mode = st.session_state.get("train_mode", 1)
     skill = SKILLS[mode]
-    strict = st.session_state.get("replay_mode") == "严格模式"
+    strict = st.session_state.get("replay_mode") == "\u4e25\u683c\u6a21\u5f0f"
 
-    col_left, col_right = st.columns([4, 1])
+    # -- 图表（全宽）--
+    chart = build_chart(chart_df, bar, swings)
+    st.plotly_chart(chart, use_container_width=True)
 
-    # ===== 左列：图表 + 导航 =====
+    # -- OHLC + Slider + 导航（一行）--
+    cur = chart_df.iloc[bar]
+    chg = cur["close"] - cur["open"]
+    sign = "+" if chg >= 0 else ""
+    ohlc = (
+        "<span style='font-size:0.85rem; color:#6c7086; font-weight:600'>"
+        "K{} &nbsp; O <b>{:.0f}</b> &nbsp; H <b>{:.0f}</b> "
+        "&nbsp; L <b>{:.0f}</b> &nbsp; C <b>{:.0f}</b> "
+        "&nbsp; <span style='color:{}'>{:+.0f}</span>"
+        "</span>"
+    ).format(
+        bar, cur["open"], cur["high"], cur["low"], cur["close"],
+        "#27ae60" if chg >= 0 else "#e74c3c", chg)
+    st.markdown(ohlc, unsafe_allow_html=True)
+
+    # slider
+    if strict:
+        new_bar = bar
+    else:
+        new_bar = st.slider(
+            "\u4f4d\u7f6e", 0, len(chart_df) - 1, bar, key="bar_slider")
+    if not strict and new_bar != bar:
+        st.session_state["current_bar"] = new_bar
+        st.rerun()
+
+    # 导航按钮
+    steps = [(-5, "-5", "b_p5"), (-1, "-1", "b_p1"), (1, "+1", "b_n1"),
+             (5, "+5", "b_n5"), (15, "+15", "b_n15"), (None, "\u672b", "b_end")]
+    nav = st.columns(len(steps))
+    for i, (step, label, key) in enumerate(steps):
+        show = (step is not None and (not strict or step > 0)) or (step is None and not strict)
+        if show:
+            if nav[i].button(label, key=key, use_container_width=True):
+                if step is not None:
+                    st.session_state["current_bar"] = max(0, min(len(chart_df) - 1, bar + step))
+                else:
+                    st.session_state["current_bar"] = len(chart_df) - 1
+                st.rerun()
+
+    st.markdown("<hr style='margin:4px 0; border-color:#eff1f5'>", unsafe_allow_html=True)
+
+    # -- 主区域：左图表信息 + 右对话 --
+    col_left, col_right = st.columns([3, 2], gap="large")
+
+    # ===== 左列：输入区 =====
     with col_left:
-        chart = build_chart(chart_df, bar)
-        st.plotly_chart(chart, use_container_width=True)
+        st.markdown("**{}** &nbsp;<span style='font-size:0.8rem; color:#6c7086'>{}</span>".format(
+            skill["name"], skill["question"]), unsafe_allow_html=True)
 
-        cur = chart_df.iloc[bar]
-        chg = cur["close"] - cur["open"]
-        sign = "+" if chg >= 0 else ""
-        st.caption(
-            "#{}  O:{:.0f}  H:{:.0f}  L:{:.0f}  C:{:.0f}  {}{:.0f}".format(
-                bar, cur["open"], cur["high"], cur["low"],
-                cur["close"], sign, chg))
-
-        # Slider
-        if strict:
-            new_bar = bar
-        else:
-            new_bar = st.slider(
-                "K线", 0, len(chart_df) - 1, bar, key="bar_slider")
-        if not strict and new_bar != bar:
-            st.session_state["current_bar"] = new_bar
-            st.rerun()
-
-        # 按钮行
-        bc = st.columns(6)
-        btns = [
-            (" -5 ", "b_p5",  not strict),
-            (" -1 ", "b_p1",  not strict),
-            (" +1 ", "b_n1",  True),
-            (" +5 ", "b_n5",  not strict),
-            ("+15 ", "b_n15", not strict),
-            ("末尾", "b_end",  not strict),
-        ]
-        for i, (label, key, enabled) in enumerate(btns):
-            with bc[i]:
-                if enabled:
-                    if label.strip() == "-5":
-                        step = -5
-                    elif label.strip() == "-1":
-                        step = -1
-                    elif label.strip() == "+1":
-                        step = 1
-                    elif label.strip() == "+5":
-                        step = 5
-                    elif label.strip() == "+15":
-                        step = 15
-                    else:
-                        step = None
-                    if st.button(label, key=key, use_container_width=True):
-                        if step is not None:
-                            st.session_state["current_bar"] = max(
-                                0, min(len(chart_df) - 1, bar + step))
-                        else:
-                            st.session_state["current_bar"] = len(chart_df) - 1
-                        st.rerun()
-
-    # ===== 右列：对话区 =====
-    with col_right:
-        st.markdown("**{}**".format(skill["name"]))
-        st.caption(skill["question"])
-        st.markdown("---")
-
-        # 对话历史
-        dialogue = st.session_state["coach_dialogue"]
-        for msg in dialogue:
-            if msg["role"] == "user":
-                st.markdown("**你：** {}".format(msg["content"]))
-            else:
-                st.markdown("**教练：** {}".format(msg["content"]))
-
-        # 输入区
         cnt = st.session_state.get("send_counter", 0)
         obs_text = st.text_area(
-            "你观察到了什么？", height=80,
-            key="obs_{}".format(cnt), label_visibility="visible")
+            "\u4f60\u89c2\u5bdf\u5230\u4e86\u4ec0\u4e48\uff1f",
+            height=100, key="obs_{}".format(cnt),
+            placeholder="\u63cf\u8ff0\u4f60\u89c2\u5bdf\u5230\u7684\u5177\u4f53\u884c\u4e3a\u53d8\u5316...",
+            label_visibility="visible",
+        )
 
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("发送", key="send_obs", use_container_width=True):
+        # 按钮行
+        bc = st.columns(4)
+        with bc[0]:
+            if st.button("\u53d1\u9001", key="send_obs", use_container_width=True, type="primary"):
                 if obs_text.strip():
                     _send_observation(obs_text.strip(), chart_df, bar, skill)
-        with c2:
-            if st.button("新一轮", key="new_round", use_container_width=True):
+        with bc[1]:
+            if st.button("\u91cd\u7f6e\u5bf9\u8bdd", key="new_round", use_container_width=True):
                 st.session_state["coach_dialogue"] = []
                 st.rerun()
+        with bc[2]:
+            if st.button("\u8bb0\u5fc6\u6d4b\u8bd5", key="btn_memory", use_container_width=True):
+                _do_memory(chart_df, bar)
+        with bc[3]:
+            if st.button("\u627e\u77db\u76fe", key="btn_contra", use_container_width=True):
+                _do_contradiction(chart_df, bar, skill)
 
-        # 特殊教练交互
-        st.markdown("---")
-        if st.button("记忆训练", key="btn_memory", use_container_width=True):
-            observations = st.session_state.get("observations", [])
-            if len(observations) < 3:
-                st.warning("至少观察3次后可用")
-            else:
-                with st.spinner("出题中..."):
-                    q = ask_memory_test(chart_df, bar, observations)
-                st.session_state["coach_dialogue"].append(
-                    {"role": "assistant", "content": "[记忆测试] " + q})
-                st.rerun()
-
-        if st.button("找矛盾", key="btn_contra", use_container_width=True):
-            if len(dialogue) < 4:
-                st.warning("至少对话2轮后可用")
-            else:
-                with st.spinner("分析中..."):
-                    q = ask_contradiction(
-                        chart_df, bar, skill["name"], dialogue)
-                st.session_state["coach_dialogue"].append(
-                    {"role": "assistant", "content": q})
-                st.rerun()
-
-    # ===== 底部：时间轴 =====
-    tl = st.session_state.get("timeline", [])
-    if tl or True:
-        with st.expander("行为变化记录 ({})".format(len(tl))):
-            for ev in tl[-10:]:
+        # 时间轴
+        st.markdown("<hr style='margin:12px 0 6px; border-color:#eff1f5'>", unsafe_allow_html=True)
+        with st.expander("\u884c\u4e3a\u53d8\u5316\u8bb0\u5f55 ({})".format(
+                len(st.session_state.get("timeline", [])))):
+            tl = st.session_state.get("timeline", [])
+            for ev in tl[-8:]:
                 st.caption("[K{}] {}".format(ev.bar, ev.text))
             tc = st.columns([5, 1])
             with tc[0]:
                 tl_input = st.text_input(
-                    "记录", key="tl_input",
-                    placeholder="描述这里的行为变化...")
+                    "\u8bb0\u5f55", key="tl_input",
+                    placeholder="\u63cf\u8ff0\u884c\u4e3a\u53d8\u5316...")
             with tc[1]:
-                if st.button("记", key="tl_add"):
+                if st.button("\u8bb0", key="tl_add"):
                     if tl_input.strip():
-                        tl.append(TimelineEvent(
-                            bar=bar, text=tl_input.strip(),
-                            timestamp=datetime.now().strftime("%H:%M:%S")))
-                        st.session_state["timeline"] = tl
+                        st.session_state.setdefault("timeline", []).append(
+                            TimelineEvent(bar=bar, text=tl_input.strip(),
+                                         timestamp=datetime.now().strftime("%H:%M:%S")))
                         st.rerun()
-            if tl and st.button("清空", key="tl_clear"):
-                st.session_state["timeline"] = []
-                st.rerun()
+            if tl:
+                if st.button("\u6e05\u7a7a", key="tl_clear"):
+                    st.session_state["timeline"] = []
+                    st.rerun()
+
+    # ===== 右列：对话区 =====
+    with col_right:
+        st.markdown("**\u6559\u7ec3\u5bf9\u8bdd**")
+        st.markdown("<hr style='margin:0 0 8px; border-color:#eff1f5'>", unsafe_allow_html=True)
+
+        dialogue = st.session_state["coach_dialogue"]
+        if not dialogue:
+            st.caption("\u53d1\u9001\u4f60\u7684\u89c2\u5bdf\uff0c\u6559\u7ec3\u4f1a\u8ffd\u95ee\u3002")
+
+        for msg in dialogue:
+            _render_bubble(msg["role"], msg["content"])
+
+        # 用户总数统计
+        if dialogue:
+            user_count = sum(1 for m in dialogue if m["role"] == "user")
+            coach_count = sum(1 for m in dialogue if m["role"] == "assistant")
+            st.markdown(
+                "<div style='font-size:0.75rem; color:#9399b2; text-align:right; margin-top:8px'>"
+                "\u4f60 {} \u6b21 | \u6559\u7ec3 {} \u6b21"
+                "</div>".format(user_count, coach_count),
+                unsafe_allow_html=True)
 
 
+# =========================================================
+# 辅助函数
+# =========================================================
 def _send_observation(text, chart_df, bar, skill):
     session = st.session_state
     dialogue = session["coach_dialogue"]
@@ -700,7 +794,7 @@ def _send_observation(text, chart_df, bar, skill):
         skill_id=mode, bar=bar, text=text,
         timestamp=datetime.now().strftime("%H:%M:%S")))
 
-    with st.spinner("教练思考中..."):
+    with st.spinner("\u6559\u7ec3\u601d\u8003\u4e2d..."):
         response = ask_coach(chart_df, bar, skill["name"], dialogue)
 
     dialogue.append({"role": "assistant", "content": response})
@@ -709,25 +803,47 @@ def _send_observation(text, chart_df, bar, skill):
     st.rerun()
 
 
+def _do_memory(chart_df, bar):
+    observations = st.session_state.get("observations", [])
+    if len(observations) < 3:
+        st.warning("\u81f3\u5c11\u89c2\u5bdf 3 \u6b21\u540e\u53ef\u7528")
+        return
+    with st.spinner("\u51fa\u9898\u4e2d..."):
+        q = ask_memory_test(chart_df, bar, observations)
+    st.session_state["coach_dialogue"].append(
+        {"role": "assistant", "content": "[\u8bb0\u5fc6\u6d4b\u8bd5] " + q})
+    st.rerun()
+
+
+def _do_contradiction(chart_df, bar, skill):
+    dialogue = st.session_state["coach_dialogue"]
+    if len(dialogue) < 4:
+        st.warning("\u81f3\u5c11\u5bf9\u8bdd 2 \u8f6e\u540e\u53ef\u7528")
+        return
+    with st.spinner("\u5206\u6790\u4e2d..."):
+        q = ask_contradiction(chart_df, bar, skill["name"], dialogue)
+    st.session_state["coach_dialogue"].append(
+        {"role": "assistant", "content": q})
+    st.rerun()
+
+
 def _do_load(symbol):
-    with st.spinner("加载中..."):
+    with st.spinner("\u52a0\u8f7d\u4e2d..."):
         seed = random.randint(0, 999999)
         df = load_data(symbol, seed=seed)
         if df is not None and len(df) > 0:
+            sw = detect_swings(df)
             st.session_state.update({
-                "chart_df": df,
+                "chart_df": df, "swings": sw,
                 "current_bar": min(40, len(df) - 1),
-                "data_loaded": True,
-                "observations": [],
-                "timeline": [],
-                "train_mode": 1,
-                "coach_dialogue": [],
-                "training_summary": "",
+                "data_loaded": True, "observations": [],
+                "timeline": [], "train_mode": 1,
+                "coach_dialogue": [], "training_summary": "",
                 "send_counter": 0,
             })
-            st.success("{}根K线".format(len(df)))
+            st.success("{} \u6839 K \u7ebf".format(len(df)))
         else:
-            st.error("加载失败")
+            st.error("\u52a0\u8f7d\u5931\u8d25")
 
 
 def _do_summary():
@@ -736,9 +852,9 @@ def _do_summary():
     observations = session.get("observations", [])
     dialogue = session.get("coach_dialogue", [])
     if not observations:
-        st.warning("还没有观察记录")
+        st.warning("\u8fd8\u6ca1\u6709\u89c2\u5bdf\u8bb0\u5f55")
         return
-    with st.spinner("生成训练总结..."):
+    with st.spinner("\u751f\u6210\u8bad\u7ec3\u603b\u7ed3..."):
         summary = ask_summary(chart_df, observations, dialogue)
     session["training_summary"] = summary
 
