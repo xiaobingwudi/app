@@ -685,7 +685,6 @@ def _do_load(symbol):
                 "coach_dialogue": [], "training_summary": "",
                 "send_counter": 0,
             })
-            st.success("{} \u6839K\u7ebf".format(len(df)))
         else:
             st.error("\u52a0\u8f7d\u5931\u8d25")
 
