@@ -118,7 +118,6 @@ div[data-testid="stHorizontalBlock"]>div>div{gap:6px!important}
 
 /* Plotly全宽 */
 .stPlotlyChart{width:100%!important}
-.stPlotlyChart>div{width:100%!important}
 .js-plotly-plot .plotly .modebar{top:2px!important}
 
 /* tab字体 */
@@ -224,8 +223,7 @@ def build_chart(chart_df, bar, swings):
         yaxis=dict(showgrid=True, gridcolor="#eff1f5", zeroline=False,
                    tickfont=dict(size=10), side="left"),
         template="plotly_white",
-        font=dict(family="system-ui,sans-serif"),
-        autosize=True)
+        font=dict(family="system-ui,sans-serif"))
     return fig
 
 # =========================================================
