@@ -76,20 +76,19 @@ def _css():
 .main .block-container{padding-top:1rem!important;padding-bottom:0!important;padding-left:1rem!important;padding-right:1rem!important}
 
 /* 侧栏 */
-[data-testid="stSidebar"]{width:210px!important;min-width:210px!important;background:#f7f8fa}
-[data-testid="stSidebar"] [data-testid="stVerticalBlock"]>div{padding-top:0!important;padding-bottom:0!important;margin-top:0!important;margin-bottom:0!important}
-[data-testid="stSidebar"] [data-testid="stVerticalBlock"]{gap:0!important}
-[data-testid="stSidebar"] h1{font-size:1.05rem!important;margin:0!important;padding:0!important}
-[data-testid="stSidebar"] .stCaption,[data-testid="stSidebar"] p{font-size:.82rem!important;line-height:1.3!important;margin:0!important}
-[data-testid="stSidebar"] .stTextInput>div>div>input{font-size:.85rem!important;padding:.15rem .4rem!important;height:30px!important}
-[data-testid="stSidebar"] .stRadio>div>label>div>span{font-size:.85rem!important}
-[data-testid="stSidebar"] .stRadio>div>label>p{font-size:.72rem!important}
-[data-testid="stSidebar"] .stMarkdown{font-size:.85rem!important;margin:0!important}
-[data-testid="stSidebar"] .stButton>button{font-size:.82rem!important;padding:.12rem .2rem!important;margin:0!important;height:28px!important;line-height:1!important}
-[data-testid="stSidebar"] .stHorizontalBlock{gap:4px!important}
-[data-testid="stSidebar"] .stHorizontalBlock>div>div{gap:4px!important}
-[data-testid="stSidebar"] hr{margin:4px 0!important}
-[data-testid="stSidebar"] .stCheckbox>label{font-size:.85rem!important}
+[data-testid="stSidebar"]{width:220px!important;min-width:220px!important;background:#f7f8fa}
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"]>div{padding-top:5px!important;padding-bottom:5px!important}
+[data-testid="stSidebar"] h1{font-size:1.15rem!important;margin:0!important}
+[data-testid="stSidebar"] .stCaption,[data-testid="stSidebar"] p{font-size:.9rem!important;line-height:1.4!important;margin:0!important}
+[data-testid="stSidebar"] .stTextInput>div>div>input{font-size:.92rem!important;padding:.2rem .5rem!important;height:32px!important}
+[data-testid="stSidebar"] .stRadio>div>label>div>span{font-size:.9rem!important}
+[data-testid="stSidebar"] .stRadio>div>label>p{font-size:.78rem!important}
+[data-testid="stSidebar"] .stMarkdown{font-size:.9rem!important;margin:0!important}
+[data-testid="stSidebar"] .stButton>button{font-size:.88rem!important;padding:.2rem .3rem!important;margin:0!important;height:30px!important;line-height:1!important}
+[data-testid="stSidebar"] .stHorizontalBlock{gap:5px!important}
+[data-testid="stSidebar"] .stHorizontalBlock>div>div{gap:5px!important}
+[data-testid="stSidebar"] hr{margin:8px 0!important}
+[data-testid="stSidebar"] .stCheckbox>label{font-size:.9rem!important}
 
 /* 全局按钮：小巧紧凑 */
 .stButton>button{border-radius:4px!important;font-size:.75rem!important;padding:.1rem .4rem!important;border:1px solid #d0d7e3!important;height:26px!important;line-height:1!important}
@@ -223,7 +222,7 @@ def build_chart(chart_df, bar, swings):
     ann.append(dict(x=bar, y=cur["high"], text="#{}".format(bar),
         showarrow=True, arrowhead=0, arrowcolor="#9399b2",
         font=dict(size=8, color="#6c7086"), ax=0, ay=22))
-    fig.update_layout(annotations=ann,
+    fig.update_layout(annotations=ann, height=520,
         margin=dict(l=12, r=55, t=5, b=2),
         xaxis_rangeslider_visible=False,
         xaxis=dict(showgrid=False, zeroline=False, tickfont=dict(size=9)),
