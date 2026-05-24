@@ -77,7 +77,7 @@ def _css():
 
 /* 侧栏 */
 [data-testid="stSidebar"]{width:220px!important;min-width:220px!important;background:#f7f8fa}
-[data-testid="stSidebar"] [data-testid="stVerticalBlock"]>div{padding-top:5px!important;padding-bottom:5px!important}
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"]>div{padding-top:2px!important;padding-bottom:2px!important}
 [data-testid="stSidebar"] h1{font-size:1.15rem!important;margin:0!important}
 [data-testid="stSidebar"] .stCaption,[data-testid="stSidebar"] p{font-size:.9rem!important;line-height:1.4!important;margin:0!important}
 [data-testid="stSidebar"] .stTextInput>div>div>input{font-size:.92rem!important;padding:.2rem .5rem!important;height:32px!important}
@@ -87,7 +87,7 @@ def _css():
 [data-testid="stSidebar"] .stButton>button{font-size:.88rem!important;padding:.2rem .3rem!important;margin:0!important;height:30px!important;line-height:1!important}
 [data-testid="stSidebar"] .stHorizontalBlock{gap:5px!important}
 [data-testid="stSidebar"] .stHorizontalBlock>div>div{gap:5px!important}
-[data-testid="stSidebar"] hr{margin:8px 0!important}
+[data-testid="stSidebar"] hr{margin:4px 0!important}
 [data-testid="stSidebar"] .stCheckbox>label{font-size:.9rem!important}
 
 /* 全局按钮：小巧紧凑 */
@@ -222,7 +222,7 @@ def build_chart(chart_df, bar, swings):
     ann.append(dict(x=bar, y=cur["high"], text="#{}".format(bar),
         showarrow=True, arrowhead=0, arrowcolor="#9399b2",
         font=dict(size=8, color="#6c7086"), ax=0, ay=22))
-    fig.update_layout(annotations=ann, height=520,
+    fig.update_layout(annotations=ann, height=600,
         margin=dict(l=12, r=55, t=5, b=2),
         xaxis_rangeslider_visible=False,
         xaxis=dict(showgrid=False, zeroline=False, tickfont=dict(size=9)),
