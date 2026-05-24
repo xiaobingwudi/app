@@ -117,7 +117,6 @@ div[data-testid="stHorizontalBlock"]>div>div{gap:6px!important}
 .sq{font-size:.82rem;color:#6c7086;margin-left:6px}
 
 /* Plotly全宽 */
-.stPlotlyChart{width:100%!important}
 .js-plotly-plot .plotly .modebar{top:2px!important}
 
 /* tab字体 */
@@ -216,7 +215,7 @@ def build_chart(chart_df, bar, swings):
     ann.append(dict(x=bar, y=cur["high"], text="#{}".format(bar),
         showarrow=True, arrowhead=0, arrowcolor="#9399b2",
         font=dict(size=9, color="#6c7086"), ax=0, ay=25))
-    fig.update_layout(annotations=ann, width=1080, height=520,
+    fig.update_layout(annotations=ann, height=520,
         margin=dict(l=50, r=10, t=8, b=5),
         xaxis_rangeslider_visible=False,
         xaxis=dict(showgrid=False, zeroline=False, tickfont=dict(size=10)),
@@ -372,7 +371,7 @@ def main():
 
     # ===== 图表（全宽）=====
     chart = build_chart(chart_df, bar, swings)
-    st.plotly_chart(chart, use_container_width=False)
+    st.plotly_chart(chart, use_container_width=True)
 
     # ===== OHLC + Slider + 导航（一行）=====
     cur = chart_df.iloc[bar]
