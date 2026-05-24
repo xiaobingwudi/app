@@ -81,50 +81,60 @@ def _css():
         scrollbar-width: thin;
     }
     
-    /* 侧边栏优化 */
+    /* 侧边栏 */
     [data-testid="stSidebar"] {
-        width: 260px !important;
-        min-width: 260px !important;
-        background: linear-gradient(135deg, #1f1f1f 0%, #1a1a1a 100%);
-        box-shadow: 2px 0 8px rgba(0,0,0,0.2);
+        width: 220px !important;
+        min-width: 220px !important;
+        background: #f7f8fa !important;
     }
     
-    [data-testid="stSidebar"] .css-1d39gos {
-        padding-top: 1rem !important;
-        padding-bottom: 1rem !important;
+    [data-testid="stSidebar"] [data-testid="stVerticalBlock"] > div {
+        padding-top: 2px !important;
+        padding-bottom: 2px !important;
     }
     
-    /* 侧边栏标题与文本 */
     [data-testid="stSidebar"] h1 {
-        font-size: 1.3rem !important;
-        font-weight: 700 !important;
-        color: #ffffff;
-        margin-bottom: 1rem !important;
+        font-size: 1.1rem !important;
+        margin: 0 !important;
     }
     
     [data-testid="stSidebar"] .stCaption,
     [data-testid="stSidebar"] p,
     [data-testid="stSidebar"] label {
-        color: #b0b0b0 !important;
-        font-size: 0.88rem !important;
+        color: #313244 !important;
+        font-size: 0.85rem !important;
+        margin: 0 !important;
+        line-height: 1.3 !important;
     }
     
-    /* 输入框与按钮优化 */
     [data-testid="stSidebar"] .stTextInput > div > div > input,
     [data-testid="stSidebar"] .stTextArea > div > div > textarea {
-        border-radius: 8px !important;
-        border: 1px solid #3a3a3a !important;
-        background-color: #2a2a2a !important;
-        color: #ffffff !important;
-        font-size: 0.9rem !important;
+        border-radius: 4px !important;
+        border: 1px solid #d0d7e3 !important;
+        font-size: 0.85rem !important;
+        padding: 0.15rem 0.4rem !important;
+        height: 28px !important;
     }
     
     [data-testid="stSidebar"] .stButton > button {
-        border-radius: 8px !important;
-        font-weight: 600 !important;
-        letter-spacing: 0.5px !important;
+        border-radius: 4px !important;
+        font-size: 0.82rem !important;
+        padding: 0.15rem 0.2rem !important;
+        margin: 0 !important;
+        height: 28px !important;
+        line-height: 1 !important;
+    }
+    
+    [data-testid="stSidebar"] hr {
         margin: 4px 0 !important;
-        height: 40px !important;
+    }
+    
+    [data-testid="stSidebar"] .stRadio > div > label > div > span {
+        font-size: 0.85rem !important;
+    }
+    
+    [data-testid="stSidebar"] .stRadio > div > label > p {
+        font-size: 0.72rem !important;
     }
     
     /* 主按钮主题色（Al Brooks 风格红） */
@@ -317,10 +327,17 @@ def build_chart(chart_df, bar, swings):
     ann.append(dict(x=bar, y=cur["high"], text="#{}".format(bar),
         showarrow=True, arrowhead=0, arrowcolor="#9399b2",
         font=dict(size=9, color="#6c7086"), ax=0, ay=25))
-    fig.update_layout(annotations=ann, height=520,
-        margin=dict(l=40, r=20, t=10, b=20),
+    # K线编号（每5根显示）
+    bar_nums = [dict(x=idx, y=cur["low"] if chart_df.iloc[idx]["close"] >= chart_df.iloc[idx]["open"] else chart_df.iloc[idx]["high"],
+                     text=str(idx), showarrow=False,
+                     font=dict(size=8, color="#9399b2"),
+                     xanchor="center", yshift=-12 if chart_df.iloc[idx]["close"] >= chart_df.iloc[idx]["open"] else 12)
+                for idx in range(0, bar + 1, 5)]
+    ann.extend(bar_nums)
+    fig.update_layout(annotations=ann, height=600,
+        margin=dict(l=40, r=60, t=10, b=5),
         xaxis_rangeslider_visible=False,
-        xaxis=dict(showgrid=False, zeroline=False, tickfont=dict(size=10)),
+        xaxis=dict(showgrid=False, zeroline=False, tickfont=dict(size=10), showticklabels=False),
         yaxis=dict(showgrid=True, gridcolor="#eff1f5", zeroline=False,
                    tickfont=dict(size=10), side="right"),
         template="plotly_white",
