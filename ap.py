@@ -231,55 +231,59 @@ def _css():
 .block-container{padding-top:1rem!important;padding-bottom:1rem!important;max-width:100%!important}
 .main .block-container{padding-left:1.5rem!important;padding-right:1.5rem!important}
 
-/* -- 侧栏紧凑 -- */
-[data-testid="stSidebar"]{width:210px!important;min-width:210px!important;background:#1b1b2f}
-[data-testid="stSidebar"] [data-testid="stVerticalBlock"]>div{padding-top:4px!important;padding-bottom:4px!important}
-[data-testid="stSidebar"] h1{font-size:1rem!important;margin:0}
-[data-testid="stSidebar"] .stCaption,[data-testid="stSidebar"] p{font-size:.75rem!important;line-height:1.3!important}
-[data-testid="stSidebar"] .stTextInput>div>div>input{font-size:.8rem!important;padding:.15rem .4rem!important}
-[data-testid="stSidebar"] .stRadio>div>label>div>span{font-size:.8rem!important}
-[data-testid="stSidebar"] .stRadio>div>label>p{font-size:.7rem!important}
-[data-testid="stSidebar"] .stMarkdown{font-size:.8rem!important}
-[data-testid="stSidebar"] .stButton>button{font-size:.75rem!important;padding:.15rem .3rem!important;margin:1px 0}
-[data-testid="stSidebar"] .stCheckbox>label>div>div>span{font-size:.8rem!important}
-[data-testid="stSidebar"] hr{margin:6px 0!important}
-[data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"]+div{margin-top:0!important}
+/* -- 侧栏 -- */
+[data-testid="stSidebar"]{width:200px!important;min-width:200px!important;background:#f8f9fb}
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"]>div{padding-top:2px!important;padding-bottom:2px!important}
+[data-testid="stSidebar"] h1{font-size:.95rem!important;margin:0 0 2px!important}
+[data-testid="stSidebar"] .stCaption,[data-testid="stSidebar"] p{font-size:.72rem!important;line-height:1.2!important;margin:0!important}
+[data-testid="stSidebar"] .stTextInput>div>div>input{font-size:.78rem!important;padding:.1rem .3rem!important;height:28px!important}
+[data-testid="stSidebar"] .stRadio>div>label>div>span{font-size:.78rem!important}
+[data-testid="stSidebar"] .stRadio>div>label>p{font-size:.68rem!important}
+[data-testid="stSidebar"] .stMarkdown{font-size:.78rem!important;margin:0!important}
+[data-testid="stSidebar"] .stButton>button{font-size:.72rem!important;padding:.1rem .2rem!important;margin:0 0 1px!important;height:26px!important;line-height:1!important}
+[data-testid="stSidebar"] hr{margin:4px 0!important}
 
-/* -- 按钮 -- */
-.stButton>button{border-radius:6px!important;font-size:.82rem!important;padding:.2rem .6rem!important;border:1px solid #d0d7e3!important;white-space:nowrap}
-.stButton>button:hover{border-color:#89b4fa!important;box-shadow:0 0 0 2px rgba(137,180,250,.12)}
+/* -- 按钮（全局缩小）-- */
+.stButton>button{border-radius:4px!important;font-size:.78rem!important;padding:.15rem .5rem!important;border:1px solid #d0d7e3!important;white-space:nowrap;height:28px!important;line-height:1!important}
+.stButton>button:hover{border-color:#89b4fa!important}
 .stButton>button[data-testid="stBaseButton-primary"]{background:#89b4fa!important;color:#1e1e2e!important;border:none!important;font-weight:600}
+.stButton [data-testid="stBaseButton-secondary"]>button{height:28px!important}
+
+/* -- 按钮行间距 -- */
+.stButton{margin-bottom:0!important}
+div[data-testid="stHorizontalBlock"]>div>div{gap:4px!important}
+[data-testid="stHorizontalBlock"]{gap:4px!important}
 
 /* -- 输入 -- */
-.stTextInput>div>div>input,.stTextArea>div>div>textarea{border-radius:6px!important;border:1px solid #d0d7e3!important;font-size:.85rem!important}
+.stTextInput>div>div>input,.stTextArea>div>div>textarea{border-radius:4px!important;border:1px solid #d0d7e3!important;font-size:.82rem!important}
 .stTextArea>div{height:fit-content!important}
 
 /* -- Slider -- */
-.stSlider>div>div>div{font-size:.8rem!important}
+.stSlider>div>div>div{font-size:.78rem!important}
 
 /* -- 对话气泡 -- */
-.bubble-u{background:#dce8ff;color:#1e1e2e;padding:6px 10px;border-radius:10px 10px 2px 10px;margin:2px 0;font-size:.85rem;max-width:98%;display:inline-block;font-weight:500;line-height:1.4}
-.bubble-c{background:#f4f4f6;color:#313244;padding:6px 10px;border-radius:10px 10px 10px 2px;margin:2px 0;font-size:.85rem;max-width:98%;display:inline-block;border-left:3px solid #89b4fa;line-height:1.4}
-.lbl-u{font-size:.7rem;color:#6c7086;margin:6px 0 1px;font-weight:600;letter-spacing:.3px}
-.lbl-c{font-size:.7rem;color:#89b4fa;margin:6px 0 1px;font-weight:600;letter-spacing:.3px}
-.dlg-stat{font-size:.7rem;color:#9399b2;text-align:right;margin-top:6px}
+.bubble-u{background:#dce8ff;color:#1e1e2e;padding:5px 8px;border-radius:8px 8px 2px 8px;margin:1px 0;font-size:.82rem;max-width:98%;display:inline-block;font-weight:500;line-height:1.35}
+.bubble-c{background:#f4f4f6;color:#313244;padding:5px 8px;border-radius:8px 8px 8px 2px;margin:1px 0;font-size:.82rem;max-width:98%;display:inline-block;border-left:2px solid #89b4fa;line-height:1.35}
+.lbl-u{font-size:.65rem;color:#6c7086;margin:5px 0 0;font-weight:600}
+.lbl-c{font-size:.65rem;color:#89b4fa;margin:5px 0 0;font-weight:600}
+.dlg-stat{font-size:.65rem;color:#9399b2;text-align:right;margin-top:4px}
 
 /* -- Expander -- */
-.streamlit-expanderHeader{font-size:.85rem!important;font-weight:600!important}
-[data-testid="stExpander"]>div>div{font-size:.82rem!important}
+.streamlit-expanderHeader{font-size:.82rem!important;font-weight:600!important;padding:4px 0!important}
+[data-testid="stExpander"]>div>div{font-size:.78rem!important}
 
 /* -- ohlc -- */
-.ohlc{font-size:.8rem;color:#6c7086;font-weight:600}
+.ohlc{font-size:.78rem;color:#6c7086;font-weight:600}
 .ohlc b{color:#313244}
 .ohlc .up{color:#27ae60}
 .ohlc .dn{color:#e74c3c}
 
 /* -- skill tag -- */
-.skill-tag{display:inline-block;background:#eef2ff;color:#4a6fa5;padding:2px 10px;border-radius:12px;font-size:.85rem;font-weight:600}
-.skill-q{font-size:.8rem;color:#6c7086;margin-left:6px}
+.skill-tag{display:inline-block;background:#eef2ff;color:#4a6fa5;padding:1px 8px;border-radius:10px;font-size:.82rem;font-weight:600}
+.skill-q{font-size:.78rem;color:#6c7086;margin-left:4px}
 
 /* -- sep -- */
-.sep{border:none;border-top:1px solid #e8ecf2;margin:6px 0}
+.sep{border:none;border-top:1px solid #e8ecf2;margin:4px 0}
 </style>""", unsafe_allow_html=True)
 
 # =========================================================
