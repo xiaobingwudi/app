@@ -251,7 +251,7 @@ def _gpt(messages):
     for a in range(3):
         try:
             resp = client.chat.completions.create(
-                model="gpt-5.4-nano", messages=messages,
+                model="gpt-5.4-mini", messages=messages,
                 temperature=0.4, max_tokens=400)
             return resp.choices[0].message.content.strip()
         except Exception as e:
