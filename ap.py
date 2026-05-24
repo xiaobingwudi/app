@@ -21,32 +21,22 @@ from openai import OpenAI
 CHUNK_SIZE = 300
 SWING_LOOKBACK = 3
 
-SYMBOLS = {
-    "上期所(shfe)": {
-        "RB": "螺纹钢", "HC": "热卷", "AU": "黄金", "AG": "白银",
-        "CU": "铜", "AL": "铝", "ZN": "锌", "NI": "镍",
-        "RU": "橡胶", "BU": "沥青", "FU": "燃油", "SC": "原油",
-        "PB": "铅", "SN": "锡", "SS": "不锈钢", "SP": "纸浆",
-    },
-    "大商所(dce)": {
-        "I": "铁矿石", "J": "焦炭", "JM": "焦煤", "A": "豆一",
-        "M": "豆粕", "Y": "豆油", "P": "棕榈油", "C": "玉米",
-        "L": "塑料", "PP": "PP", "EG": "乙二醇", "EB": "苯乙烯",
-        "PG": "LPG", "V": "PVC", "B": "豆二", "JD": "鸡蛋",
-    },
-    "郑商所(czce)": {
-        "CF": "棉花", "SR": "白糖", "TA": "PTA", "MA": "甲醇",
-        "FG": "玻璃", "SA": "纯碱", "OI": "菜油", "RM": "菜粕",
-        "AP": "苹果", "ZC": "动力煤", "SF": "硅铁", "SM": "锰硅",
-        "UR": "尿素", "PF": "短纤", "SH": "烧碱", "PX": "对二甲苯",
-    },
-    "中金所(cffex)": {
-        "IF": "沪深300", "IC": "中证500", "IM": "中证1000",
-        "IH": "上证50", "T": "十债", "TF": "五债", "TS": "两债",
-    },
-    "广期所(gfex)": {
-        "SI": "工业硅", "LC": "碳酸锂", "PS": "聚烯烃", "PD": "铂钯",
-    },
+SYMBOL_NAMES = {
+    "RB": "螺纹钢", "HC": "热卷", "AU": "黄金", "AG": "白银",
+    "CU": "铜", "AL": "铝", "ZN": "锌", "NI": "镍",
+    "RU": "橡胶", "BU": "沥青", "FU": "燃油", "SC": "原油",
+    "PB": "铅", "SN": "锡", "SS": "不锈钢", "SP": "纸浆",
+    "I": "铁矿石", "J": "焦炭", "JM": "焦煤", "A": "豆一",
+    "M": "豆粕", "Y": "豆油", "P": "棕榈油", "C": "玉米",
+    "L": "塑料", "PP": "PP", "EG": "乙二醇", "EB": "苯乙烯",
+    "PG": "LPG", "V": "PVC", "B": "豆二", "JD": "鸡蛋",
+    "CF": "棉花", "SR": "白糖", "TA": "PTA", "MA": "甲醇",
+    "FG": "玻璃", "SA": "纯碱", "OI": "菜油", "RM": "菜粕",
+    "AP": "苹果", "ZC": "动力煤", "SF": "硅铁", "SM": "锰硅",
+    "UR": "尿素", "PF": "短纤", "SH": "烧碱", "PX": "对二甲苯",
+    "IF": "沪深300", "IC": "中证500", "IM": "中证1000",
+    "IH": "上证50", "T": "十债", "TF": "五债", "TS": "两债",
+    "SI": "工业硅", "LC": "碳酸锂", "PS": "聚烯烃", "PD": "铂钯",
 }
 
 SKILLS = {
@@ -448,10 +438,24 @@ def main():
     with st.sidebar:
         st.title("\u8bfb\u76d8\u8bad\u7ec3\u5668")
 
-        _all = [(ex, k, v) for ex, d in SYMBOLS.items() for k, v in d.items()]
-        sym_label = st.selectbox("品种", [n for _, _, n in _all])
-        sel = [x for x in _all if x[2] == sym_label][0]
-        sym_exchange, sym_code, _ = sel
+        if "main_contracts" not in st.session_state:
+            st.session_state["main_contracts"] = {}
+        mc = st.session_state["main_contracts"]
+        if not mc:
+            with st.spinner("获取主力合约..."):
+                _load_all_main_contracts(mc)
+        if mc:
+            labels = []
+            for code, sym in sorted(mc.items()):
+                name = SYMBOL_NAMES.get(code, code)
+                labels.append("{} ({})".format(name, sym))
+            sym_idx = st.selectbox("品种", range(len(labels)),
+                                   format_func=lambda i: labels[i])
+            sym_code = list(mc.keys())[sym_idx]
+            sym_main = mc[sym_code]
+        else:
+            st.warning("主力合约获取失败，请刷新重试")
+            return
         c1, c2 = st.columns(2)
         with c1:
             if st.button("\u52a0\u8f7d", key="ld", use_container_width=True):
@@ -702,30 +706,27 @@ def _do_contra(chart_df, bar, skill):
     st.rerun()
 
 
-def _get_main_symbol(exchange, code):
-    for _ in range(3):
+def _load_all_main_contracts(mc):
+    import akshare as ak
+    for ex in ["shfe", "dce", "czce", "cffex", "gfex"]:
         try:
-            import akshare as ak
-            ex_key = exchange.split("(")[1].rstrip(")")
-            result = ak.match_main_contract(symbol=ex_key)
-            lines = str(result).strip().split("\n")
-            for line in lines:
-                parts = line.split()
-                if parts and parts[0].upper().startswith(code.upper()):
-                    return parts[0]
+            result = ak.match_main_contract(symbol=ex)
+            contracts = str(result).split(",")
+            for c in contracts:
+                c = c.strip()
+                if len(c) < 3:
+                    continue
+                code = "".join(ch for ch in c[:4] if ch.isalpha()).upper()
+                if code in SYMBOL_NAMES and code not in mc:
+                    mc[code] = c
         except Exception:
-            time.sleep(1)
-    return None
+            pass
+        time.sleep(0.3)
 
-def _do_load(sym_code, sym_exchange="dce"):
+def _do_load(sym_code, sym_main):
     with st.spinner("\u52a0\u8f7d\u4e2d..."):
-        main_sym = _get_main_symbol(sym_exchange, sym_code)
-        if main_sym is None:
-            st.error("\u83b7\u53d6\u4e3b\u529b\u5408\u7ea6\u5931\u8d25: {}".format(sym_code))
-            return
-        st.caption("\u4e3b\u529b\u5408\u7ea6: {}".format(main_sym))
         seed = random.randint(0, 999999)
-        df = load_data(main_sym, seed=seed)
+        df = load_data(sym_main, seed=seed)
         if df is not None and len(df) > 0:
             sw = detect_swings(df)
             st.session_state.update({
