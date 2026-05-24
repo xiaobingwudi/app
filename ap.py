@@ -116,6 +116,11 @@ div[data-testid="stHorizontalBlock"]>div>div{gap:6px!important}
 .stag{display:inline-block;background:#eef2ff;color:#4a6fa5;padding:2px 10px;border-radius:10px;font-size:.88rem;font-weight:600}
 .sq{font-size:.82rem;color:#6c7086;margin-left:6px}
 
+/* Plotly全宽 */
+.stPlotlyChart{width:100%!important}
+.stPlotlyChart>div{width:100%!important}
+.js-plotly-plot .plotly .modebar{top:2px!important}
+
 /* tab字体 */
 .stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p{font-size:.88rem!important}
 </style>""", unsafe_allow_html=True)
