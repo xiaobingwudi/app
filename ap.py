@@ -702,10 +702,28 @@ def _do_contra(chart_df, bar, skill):
     st.rerun()
 
 
+def _get_main_symbol(code):
+    for _ in range(3):
+        try:
+            df = ak.match_main_contract(symbol=code.lower())
+            lines = str(df).strip().split("\n")
+            for line in lines:
+                parts = line.split()
+                if parts and parts[0].startswith(code.upper()):
+                    return parts[0]
+        except Exception:
+            time.sleep(1)
+    return None
+
 def _do_load(sym_code):
     with st.spinner("\u52a0\u8f7d\u4e2d..."):
+        main_sym = _get_main_symbol(sym_code)
+        if main_sym is None:
+            st.error("\u83b7\u53d6\u4e3b\u529b\u5408\u7ea6\u5931\u8d25: {}".format(sym_code))
+            return
+        st.caption("\u4e3b\u529b\u5408\u7ea6: {}".format(main_sym))
         seed = random.randint(0, 999999)
-        df = load_data(symbol, seed=seed)
+        df = load_data(main_sym, seed=seed)
         if df is not None and len(df) > 0:
             sw = detect_swings(df)
             st.session_state.update({
