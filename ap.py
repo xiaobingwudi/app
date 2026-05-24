@@ -22,29 +22,29 @@ CHUNK_SIZE = 300
 SWING_LOOKBACK = 3
 
 SYMBOLS = {
-    "上期所": {
+    "上期所(shfe)": {
         "RB": "螺纹钢", "HC": "热卷", "AU": "黄金", "AG": "白银",
         "CU": "铜", "AL": "铝", "ZN": "锌", "NI": "镍",
         "RU": "橡胶", "BU": "沥青", "FU": "燃油", "SC": "原油",
         "PB": "铅", "SN": "锡", "SS": "不锈钢", "SP": "纸浆",
     },
-    "大商所": {
+    "大商所(dce)": {
         "I": "铁矿石", "J": "焦炭", "JM": "焦煤", "A": "豆一",
         "M": "豆粕", "Y": "豆油", "P": "棕榈油", "C": "玉米",
         "L": "塑料", "PP": "PP", "EG": "乙二醇", "EB": "苯乙烯",
         "PG": "LPG", "V": "PVC", "B": "豆二", "JD": "鸡蛋",
     },
-    "郑商所": {
+    "郑商所(czce)": {
         "CF": "棉花", "SR": "白糖", "TA": "PTA", "MA": "甲醇",
         "FG": "玻璃", "SA": "纯碱", "OI": "菜油", "RM": "菜粕",
         "AP": "苹果", "ZC": "动力煤", "SF": "硅铁", "SM": "锰硅",
         "UR": "尿素", "PF": "短纤", "SH": "烧碱", "PX": "对二甲苯",
     },
-    "中金所": {
+    "中金所(cffex)": {
         "IF": "沪深300", "IC": "中证500", "IM": "中证1000",
         "IH": "上证50", "T": "十债", "TF": "五债", "TS": "两债",
     },
-    "广期所": {
+    "广期所(gfex)": {
         "SI": "工业硅", "LC": "碳酸锂", "PS": "聚烯烃", "PD": "铂钯",
     },
 }
@@ -448,17 +448,17 @@ def main():
     with st.sidebar:
         st.title("\u8bfb\u76d8\u8bad\u7ec3\u5668")
 
-        sym_label = st.selectbox("品种", sorted(set(
-            v for ex in SYMBOLS.values() for v in ex.values())))
-        sym_code = [k for k, v in (s for ex in SYMBOLS.values() for s in ex.items())
-                    if v == sym_label][0]
+        _all = [(ex, k, v) for ex, d in SYMBOLS.items() for k, v in d.items()]
+        sym_label = st.selectbox("品种", [n for _, _, n in _all])
+        sel = [x for x in _all if x[2] == sym_label][0]
+        sym_exchange, sym_code, _ = sel
         c1, c2 = st.columns(2)
         with c1:
             if st.button("\u52a0\u8f7d", key="ld", use_container_width=True):
-                _do_load(sym_code)
+                _do_load(sym_code, sym_exchange)
         with c2:
             if st.button("\u6362\u4e00\u6bb5", key="rn", use_container_width=True):
-                _do_load(sym_code)
+                _do_load(sym_code, sym_exchange)
 
         if st.session_state.get("data_loaded"):
             st.markdown("---")
@@ -702,22 +702,24 @@ def _do_contra(chart_df, bar, skill):
     st.rerun()
 
 
-def _get_main_symbol(code):
+def _get_main_symbol(exchange, code):
     for _ in range(3):
         try:
-            df = ak.match_main_contract(symbol=code.lower())
-            lines = str(df).strip().split("\n")
+            import akshare as ak
+            ex_key = exchange.split("(")[1].rstrip(")")
+            result = ak.match_main_contract(symbol=ex_key)
+            lines = str(result).strip().split("\n")
             for line in lines:
                 parts = line.split()
-                if parts and parts[0].startswith(code.upper()):
+                if parts and parts[0].upper().startswith(code.upper()):
                     return parts[0]
         except Exception:
             time.sleep(1)
     return None
 
-def _do_load(sym_code):
+def _do_load(sym_code, sym_exchange="dce"):
     with st.spinner("\u52a0\u8f7d\u4e2d..."):
-        main_sym = _get_main_symbol(sym_code)
+        main_sym = _get_main_symbol(sym_exchange, sym_code)
         if main_sym is None:
             st.error("\u83b7\u53d6\u4e3b\u529b\u5408\u7ea6\u5931\u8d25: {}".format(sym_code))
             return
