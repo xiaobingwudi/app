@@ -21,6 +21,30 @@ from openai import OpenAI
 CHUNK_SIZE = 300
 SWING_LOOKBACK = 3
 
+SYMBOLS = {
+    "上期所": {
+        "RB": "螺纹钢", "HC": "热卷", "AU": "黄金", "AG": "白银",
+        "CU": "铜", "AL": "铝", "ZN": "锌", "NI": "镍",
+        "RU": "橡胶", "BU": "沥青", "FU": "燃油", "SC": "原油",
+        "PB": "铅", "SN": "锡", "SS": "不锈钢", "SP": "纸浆",
+    },
+    "大商所": {
+        "I": "铁矿石", "J": "焦炭", "JM": "焦煤", "A": "豆一",
+        "M": "豆粕", "Y": "豆油", "P": "棕榈油", "C": "玉米",
+        "L": "塑料", "PP": "PP", "EG": "乙二醇", "EB": "苯乙烯",
+        "PG": "LPG", "V": "PVC", "B": "豆二", "JD": "鸡蛋",
+    },
+    "郑商所": {
+        "CF": "棉花", "SR": "白糖", "TA": "PTA", "MA": "甲醇",
+        "FG": "玻璃", "SA": "纯碱", "OI": "菜油", "RM": "菜粕",
+        "AP": "苹果", "ZC": "动力煤", "SF": "硅铁", "SM": "锰硅",
+        "UR": "尿素", "PF": "短纤", "SH": "烧碱", "PX": "对二甲苯",
+    },
+    "广期所": {
+        "SI": "工业硅", "LC": "碳酸锂", "PS": "聚烯烃", "PD": "铂钯",
+    },
+}
+
 SKILLS = {
     1: {"name": "背景阅读",   "question": "当前市场背景是什么？"},
     2: {"name": "控制权识别", "question": "现在谁在控制市场？"},
@@ -64,19 +88,6 @@ AI_SYSTEM_PROMPT = """
 【回答风格】简短、直接、一次只推进一步、不长篇解释。
 如果用户开始下定义/猜趋势/猜方向，必须立即拉回"具体发生了什么行为？"
 这是你的最高优先级。
-【只总结】：
-1. 用户最容易忽略的行为
-2. 用户最容易提前下定义的位置
-3. 用户最缺失的连续性观察
-4. 用户最容易忽略的对手回应
-
-禁止：
-- 安慰
-- 表扬
-- 市场分析
-- 理论教学
-
-必须引用用户真实观察内容。
 """
 
 # =========================================================
@@ -278,7 +289,7 @@ class SwingPoint:
 def _fetch_raw(symbol):
     for _ in range(3):
         try:
-            df = ak.futures_zh_minute_sina(symbol=symbol, period="15")
+            df = ak.futures_zh_minute_sina(symbol=symbol, period="30")
             df = df.rename(columns={"datetime":"datetime","open":"open","high":"high","low":"low","close":"close"})
             df = df.reset_index(drop=True)
             df["datetime"] = pd.to_datetime(df["datetime"])
@@ -433,14 +444,17 @@ def main():
     with st.sidebar:
         st.title("\u8bfb\u76d8\u8bad\u7ec3\u5668")
 
-        symbol = st.text_input("\u5408\u7ea6\u4ee3\u7801", value="rb2510", key="sym")
+        sym_label = st.selectbox("品种", sorted(set(
+            v for ex in SYMBOLS.values() for v in ex.values())))
+        sym_code = [k for k, v in (s for ex in SYMBOLS.values() for s in ex.items())
+                    if v == sym_label][0]
         c1, c2 = st.columns(2)
         with c1:
             if st.button("\u52a0\u8f7d", key="ld", use_container_width=True):
-                _do_load(symbol)
+                _do_load(sym_code)
         with c2:
             if st.button("\u6362\u4e00\u6bb5", key="rn", use_container_width=True):
-                _do_load(symbol)
+                _do_load(sym_code)
 
         if st.session_state.get("data_loaded"):
             st.markdown("---")
@@ -684,7 +698,7 @@ def _do_contra(chart_df, bar, skill):
     st.rerun()
 
 
-def _do_load(symbol):
+def _do_load(sym_code):
     with st.spinner("\u52a0\u8f7d\u4e2d..."):
         seed = random.randint(0, 999999)
         df = load_data(symbol, seed=seed)
@@ -714,3 +728,33 @@ def _do_summary():
 
 if __name__ == "__main__":
     main()
+
+
+
+# SYMBOLS = {
+#     "上期所": {
+#         "RB": "螺纹钢", "HC": "热卷", "AU": "黄金", "AG": "白银",
+#         "CU": "铜", "AL": "铝", "ZN": "锌", "NI": "镍",
+#         "RU": "橡胶", "BU": "沥青", "FU": "燃油", "SC": "原油",
+#         "PB": "铅", "SN": "锡", "SS": "不锈钢", "SP": "纸浆",
+#     },
+#     "大商所": {
+#         "I": "铁矿石", "J": "焦炭", "JM": "焦煤", "A": "豆一",
+#         "M": "豆粕", "Y": "豆油", "P": "棕榈油", "C": "玉米",
+#         "L": "塑料", "PP": "PP", "EG": "乙二醇", "EB": "苯乙烯",
+#         "PG": "LPG", "V": "PVC", "B": "豆二", "JD": "鸡蛋",
+#     },
+#     "郑商所": {
+#         "CF": "棉花", "SR": "白糖", "TA": "PTA", "MA": "甲醇",
+#         "FG": "玻璃", "SA": "纯碱", "OI": "菜油", "RM": "菜粕",
+#         "AP": "苹果", "ZC": "动力煤", "SF": "硅铁", "SM": "锰硅",
+#         "UR": "尿素", "PF": "短纤", "SH": "烧碱", "PX": "对二甲苯",
+#     },
+#     "中金所": {
+#         "IF": "沪深300", "IC": "中证500", "IM": "中证1000",
+#         "IH": "上证50", "T": "十债", "TF": "五债", "TS": "两债",
+#     },
+#     "广期所": {
+#         "SI": "工业硅", "LC": "碳酸锂", "PS": "聚烯烃", "PD": "铂钯",
+#     },
+# }
