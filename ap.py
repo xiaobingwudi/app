@@ -78,7 +78,10 @@ def _css():
     /* 全局重置与字体优化 */
     html, body, [class*="css"] { 
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-        scrollbar-width: thin;
+        scrollbar-width: none;
+    }
+    .main::-webkit-scrollbar, [data-testid="stSidebar"]::-webkit-scrollbar {
+        width: 0 !important;
     }
     
     /* 侧边栏 */
@@ -89,8 +92,8 @@ def _css():
     }
     
     [data-testid="stSidebar"] [data-testid="stVerticalBlock"] > div {
-        padding-top: 2px !important;
-        padding-bottom: 2px !important;
+        padding-top: 1px !important;
+        padding-bottom: 1px !important;
     }
     
     [data-testid="stSidebar"] h1 {
@@ -192,9 +195,9 @@ def _css():
     /* --- 图表容器强化 --- */
     .main .block-container {
         max-width: 100% !important;
-        padding-top: 1rem !important;
-        padding-right: 1rem !important;
-        padding-left: 1rem !important;
+        padding-top: 0.3rem !important;
+        padding-right: 0.5rem !important;
+        padding-left: 0.5rem !important;
         display: flex;
         flex-direction: column;
     }
@@ -334,7 +337,7 @@ def build_chart(chart_df, bar, swings):
                      xanchor="center", yshift=-12 if chart_df.iloc[idx]["close"] >= chart_df.iloc[idx]["open"] else 12)
                 for idx in range(0, bar + 1, 5)]
     ann.extend(bar_nums)
-    fig.update_layout(annotations=ann, height=600,
+    fig.update_layout(annotations=ann, height=400,
         margin=dict(l=40, r=60, t=10, b=5),
         xaxis_rangeslider_visible=False,
         xaxis=dict(showgrid=False, zeroline=False, tickfont=dict(size=10), showticklabels=False),
