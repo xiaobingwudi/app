@@ -372,7 +372,7 @@ def main():
 
     # ===== 图表（全宽）=====
     chart = build_chart(chart_df, bar, swings)
-    st.plotly_chart(chart, use_container_width=True)
+    st.plotly_chart(chart, use_container_width=False)
 
     # ===== OHLC + Slider + 导航（一行）=====
     cur = chart_df.iloc[bar]
