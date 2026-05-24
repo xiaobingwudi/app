@@ -69,6 +69,9 @@ AI_SYSTEM_PROMPT = """
 # =========================================================
 # 样式
 # =========================================================
+def _page_config():
+    st.set_page_config(layout="wide", initial_sidebar_state="expanded")
+
 def _css():
     st.markdown("""
     <style>
@@ -76,14 +79,6 @@ def _css():
     html, body, [class*="css"] { 
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
         scrollbar-width: thin;
-    }
-    
-    /* 容器宽度最大化 */
-    .main .block-container {
-        max-width: 100% !important;
-        padding-top: 1rem !important;
-        padding-right: 1rem !important;
-        padding-left: 1rem !important;
     }
     
     /* 侧边栏优化 */
@@ -184,6 +179,45 @@ def _css():
         color: #333333;
     }
     
+    /* --- 图表容器强化 --- */
+    .main .block-container {
+        max-width: 100% !important;
+        padding-top: 1rem !important;
+        padding-right: 1rem !important;
+        padding-left: 1rem !important;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .js-plotly-plot, .plotly-graph-div {
+        width: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+
+    [data-testid="stVerticalBlock"] > [data-testid="stVerticalBlock"] {
+        width: 100% !important;
+        min-width: 100% !important;
+    }
+
+    /* --- 顶部状态栏优化 --- */
+    .ohlc {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-size: 0.9rem;
+    }
+
+    /* 导航按钮微调 */
+    .stButton>button {
+        min-width: 32px;
+        height: 32px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+    }
+
     /* Plotly 图表容器 */
     .js-plotly-plot .plotly .modebar {
         display: none !important;
@@ -284,11 +318,11 @@ def build_chart(chart_df, bar, swings):
         showarrow=True, arrowhead=0, arrowcolor="#9399b2",
         font=dict(size=9, color="#6c7086"), ax=0, ay=25))
     fig.update_layout(annotations=ann, height=520,
-        margin=dict(l=50, r=10, t=8, b=5),
+        margin=dict(l=40, r=20, t=10, b=20),
         xaxis_rangeslider_visible=False,
         xaxis=dict(showgrid=False, zeroline=False, tickfont=dict(size=10)),
         yaxis=dict(showgrid=True, gridcolor="#eff1f5", zeroline=False,
-                   tickfont=dict(size=10), side="left"),
+                   tickfont=dict(size=10), side="right"),
         template="plotly_white",
         font=dict(family="system-ui,sans-serif"))
     return fig
@@ -356,6 +390,7 @@ def ask_contradiction(chart_df, bar, skill_name, dialogue):
 # 主程序
 # =========================================================
 def main():
+    _page_config()
     _css()
 
     for k, d in [("data_loaded",False),("observations",[]),("train_mode",1),
