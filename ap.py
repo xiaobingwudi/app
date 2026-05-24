@@ -459,10 +459,10 @@ def main():
         c1, c2 = st.columns(2)
         with c1:
             if st.button("\u52a0\u8f7d", key="ld", use_container_width=True):
-                _do_load(sym_code, sym_exchange)
+                _do_load(sym_code, sym_main)
         with c2:
             if st.button("\u6362\u4e00\u6bb5", key="rn", use_container_width=True):
-                _do_load(sym_code, sym_exchange)
+                _do_load(sym_code, sym_main)
 
         if st.session_state.get("data_loaded"):
             st.markdown("---")
