@@ -72,7 +72,7 @@ AI_SYSTEM_PROMPT = """
 def _css():
     st.markdown("""<style>
 /* 全局 */
-.main .block-container{padding-top:1.2rem!important;padding-bottom:1rem!important;padding-left:1.5rem!important;padding-right:1.5rem!important;max-width:100%!important}
+.main .block-container{padding-top:1.2rem!important;padding-bottom:1rem!important;padding-left:1rem!important;padding-right:1rem!important;max-width:100%!important}
 
 /* 侧栏 */
 [data-testid="stSidebar"]{width:220px!important;min-width:220px!important;background:#f7f8fa}
