@@ -1,25 +1,23 @@
 # =========================================================
-# Al Brooks 读盘训练器 V12
+# Al Brooks 读盘训练器 V15
 # =========================================================
 #
-# 训练目标：
-#   1. 背景阅读     — 识别市场背景
-#   2. 控制权识别   — 判断谁在控制市场
-#   3. 推进质量判断 — 评估推进波强弱
-#   4. 回调 vs 转换 — 区分正常回调与真正转换
-#   5. 市场接受     — 市场是否接受新价格
+# 核心架构：
+#   - 用户 = 真正训练者
+#   - GPT = 教练（与用户看同一个盘面）
+#   - 软件 = 训练场
 #
-# 设计原则：
-#   - 用户直接看 K 线图，系统不写文字总结
-#   - AI 是苏格拉底式教练：不给答案，通过提问发现盲点
-#   - Replay 是唯一训练方式
+# GPT与用户共享完整K线环境。
+# 真正的限制不是"GPT知道什么"，而是"GPT怎么回答"。
 #
 # =========================================================
 
-import os
+import json
 import time
+import random
 from datetime import datetime
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import List, Dict, Optional
 
 import numpy as np
 import pandas as pd
@@ -32,6 +30,7 @@ from openai import OpenAI
 # 常量
 # =========================================================
 SWING_LOOKBACK = 3
+CHUNK_SIZE = 300
 
 SKILLS = {
     1: {"name": "背景阅读",     "question": "当前市场背景是什么？"},
@@ -41,15 +40,123 @@ SKILLS = {
     5: {"name": "市场接受",     "question": "市场是否接受了新价格？"},
 }
 
-AI_SYSTEM_PROMPT = (
-    "你是一个 Al Brooks 价格行为读盘教练。"
-    "你的角色不是给学生答案，而是通过提问帮助他们发现自己可能忽略的地方。"
-    "规则：绝对不能告诉学生正确答案；绝对不能解释市场行为；"
-    "只能提问和指向具体的K线位置；问题要简短、直接、具体；"
-    "每次最多2-3个问题；用中文回复。"
-    "指向具体K线范围时用第X根到第Y根。不要加前缀或编号。"
-)
+AI_SYSTEM_PROMPT = """
+你是一个 Al Brooks 价格行为训练教练。
 
+你的职责不是分析市场。
+你的职责不是预测市场。
+你的职责不是告诉用户答案。
+
+你的唯一职责是：
+
+训练用户获得以下5种核心能力：
+
+1. 背景阅读
+2. 控制权识别
+3. 推进质量判断
+4. 区分正常回调与真正转换
+5. 理解市场是否接受新价格
+
+你必须牢记：
+
+真正获得能力的人只能是用户。
+你永远不能替用户完成观察、推理、判断。
+
+你是教练。
+不是分析师。
+
+--------------------------------------------------
+
+你必须遵守以下规则：
+
+【禁止事项】
+
+禁止直接告诉用户：
+- 市场正在上涨/下跌
+- 当前是趋势/区间/反转
+- 多头/空头控制
+- 是否应该做多/做空
+- 哪一方正确
+- 用户判断是否正确
+
+禁止：
+- 直接给市场结论
+- 替用户解释市场
+- 替用户总结答案
+- 预测后续走势
+
+--------------------------------------------------
+
+【你的真正职责】
+
+你只能：
+
+1. 引导用户观察具体K线
+
+例如：
+- 哪几根？
+- 从哪里开始变化？
+- 后续有没有跟进？
+- 对手有没有回应？
+
+2. 强迫用户描述具体行为
+
+例如：
+- 实体变化
+- 收盘位置变化
+- 重叠变化
+- 高低点变化
+- 跟进行为
+- 对手回应
+
+3. 强迫用户提供依据
+
+如果用户说：
+"市场转弱了"
+
+你不能认同。
+
+你必须追问：
+
+"你观察到了哪些具体行为变化？"
+"从哪几根开始？"
+"后续有没有跟进？"
+
+4. 强迫用户面对矛盾
+
+例如：
+- 你认为转弱，但为什么后续仍然连续收于高位？
+- 你认为控制权改变，但对手为什么缺乏跟进？
+- 你认为市场接受新价格，但为什么价格反复回到原区域？
+
+5. 帮助用户建立连续性观察能力
+
+你必须让用户：
+- 不只看单根K线
+- 不只看形态
+- 不只看标签
+
+而是观察：
+- 行为如何变化
+- 行为是否连续
+- 对手是否回应
+- 跟进是否持续
+
+--------------------------------------------------
+
+【你的回答风格】
+
+- 简短
+- 直接
+- 不解释市场
+- 不下结论
+- 不长篇分析
+
+每次只推进用户一步观察。
+
+如果用户能力画像中标注了长期弱点，
+你应该在适当时候针对弱点引导观察。
+"""
 
 # =========================================================
 # 数据类
@@ -59,7 +166,6 @@ class SwingPoint:
     index: int
     kind: str
     price: float
-
 
 @dataclass
 class Leg:
@@ -72,26 +178,40 @@ class Leg:
     price_range: float
     body_avg: float
 
-
 @dataclass
-class SkillAnswer:
+class Observation:
     skill_id: int
     bar: int
-    answer: str
+    judgment: str
+    bar_from: int
+    bar_to: int
+    behaviors: List[str]
     timestamp: str
+
+@dataclass
+class TimelineEvent:
+    bar: int
+    description: str
+    event_type: str  # "inflection" or "observe"
+    timestamp: str
+
+@dataclass
+class UserWeakness:
+    pattern: str
+    count: int = 0
+    examples: List[str] = field(default_factory=list)
 
 # =========================================================
 # 数据加载
 # =========================================================
 @st.cache_data(ttl=300, show_spinner="加载中...")
-def load_data(symbol: str = "IF0") -> pd.DataFrame:
+def _fetch_raw(symbol: str) -> pd.DataFrame:
     for _ in range(3):
         try:
             df = ak.futures_zh_minute_sina(symbol=symbol, period="15")
             df = df.rename(columns={
                 "datetime": "datetime", "open": "open",
-                "high": "high", "low": "low", "close": "close",
-            })
+                "high": "high", "low": "low", "close": "close"})
             df = df.reset_index(drop=True)
             df["datetime"] = pd.to_datetime(df["datetime"])
             for col in ["open", "high", "low", "close"]:
@@ -102,9 +222,19 @@ def load_data(symbol: str = "IF0") -> pd.DataFrame:
             time.sleep(1)
     return pd.DataFrame()
 
+def load_data(symbol: str, seed: int = None) -> pd.DataFrame:
+    raw = _fetch_raw(symbol)
+    if raw is None or len(raw) == 0:
+        return pd.DataFrame()
+    n = len(raw)
+    if n <= CHUNK_SIZE:
+        return raw.reset_index(drop=True)
+    rng = random.Random(seed)
+    start = rng.randint(0, n - CHUNK_SIZE)
+    return raw.iloc[start:start + CHUNK_SIZE].reset_index(drop=True)
 
 # =========================================================
-# 检测函数
+# Swing / Leg 检测
 # =========================================================
 def detect_swings(df: pd.DataFrame) -> list:
     N = SWING_LOOKBACK
@@ -117,429 +247,522 @@ def detect_swings(df: pd.DataFrame) -> list:
             swings.append(SwingPoint(index=i, kind="SL", price=float(lows[i])))
     return swings
 
-
 def detect_legs(df: pd.DataFrame, swings: list) -> list:
-    if len(swings) < 2:
+    if not swings:
         return []
     legs = []
-    for i in range(len(swings) - 1):
-        s1, s2 = swings[i], swings[i + 1]
-        if s2.index <= s1.index:
-            continue
-        segment = df.iloc[s1.index: s2.index + 1]
-        if len(segment) < 2:
-            continue
-        if s1.kind == "SL" and s2.kind == "SH":
-            direction, ps, pe = "bull", s1.price, s2.price
-        elif s1.kind == "SH" and s2.kind == "SL":
-            direction, ps, pe = "bear", s1.price, s2.price
-        else:
-            continue
-        bodies = []
-        for j in range(len(segment)):
-            bar = segment.iloc[j]
-            rng = bar["high"] - bar["low"]
-            bodies.append(abs(bar["close"] - bar["open"]) / rng if rng > 1e-9 else 0)
-        legs.append(Leg(
-            start_idx=s1.index, end_idx=s2.index, direction=direction,
-            bar_count=s2.index - s1.index + 1, price_start=ps, price_end=pe,
-            price_range=abs(pe - ps), body_avg=round(float(np.mean(bodies)), 3),
-        ))
+    direction = None
+    start_idx = 0
+    price_start = float(df.iloc[0]["close"])
+    for s in swings:
+        if s.kind == "SH" and direction != "bull":
+            if direction is not None and s.index > start_idx + 2:
+                _al(legs, df, start_idx, s.index - 1, direction, price_start,
+                    float(df.iloc[s.index - 1]["close"]))
+            direction = "bull"
+            start_idx = s.index
+            price_start = float(df.iloc[s.index]["high"])
+        elif s.kind == "SL" and direction != "bear":
+            if direction is not None and s.index > start_idx + 2:
+                _al(legs, df, start_idx, s.index - 1, direction, price_start,
+                    float(df.iloc[s.index - 1]["close"]))
+            direction = "bear"
+            start_idx = s.index
+            price_start = float(df.iloc[s.index]["low"])
+    if direction is not None and start_idx < len(df) - 2:
+        _al(legs, df, start_idx, len(df) - 1, direction, price_start,
+            float(df.iloc[len(df) - 1]["close"]))
     return legs
 
-
-
-# =========================================================
-# 图表上下文提取（给 AI 用）
-# =========================================================
-def extract_chart_context(chart_df, swings, legs, bar):
-    n = len(chart_df)
-    if bar < 0 or bar >= n:
-        return None
-    lookback = min(25, bar)
-    recent = chart_df.iloc[bar - lookback: bar + 1].copy()
-
-    bars_text = []
-    for idx in range(len(recent)):
-        row = recent.iloc[idx]
-        actual_bar = bar - lookback + idx
-        d = "+" if row["close"] > row["open"] else "-" if row["close"] < row["open"] else "="
-        bars_text.append(
-            "#{0} O:{1:.1f} H:{2:.1f} L:{3:.1f} C:{4:.1f} {5}".format(
-                actual_bar, row["open"], row["high"], row["low"], row["close"], d
-            )
-        )
-
-    safe_legs = [l for l in legs if hasattr(l, "end_idx") and l.end_idx <= bar]
-    legs_text = []
-    for l in safe_legs[-4:]:
-        d = "多" if l.direction == "bull" else "空"
-        legs_text.append("波段{0}: #{1}-{2} {3}根 范围{4:.1f}".format(
-            d, l.start_idx, l.end_idx, l.bar_count, l.price_range))
-
-    safe_swings = [s for s in swings if hasattr(s, "index") and s.index <= bar]
-    swings_text = []
-    for s in safe_swings[-4:]:
-        label = "SH" if s.kind == "SH" else "SL"
-        swings_text.append("{0}: #{1} {2:.1f}".format(label, s.index, s.price))
-
-    return {
-        "current_bar": bar,
-        "total_bars": n,
-        "bars": bars_text,
-        "legs": legs_text,
-        "swings": swings_text,
-    }
-
-
-# =========================================================
-# AI 教练 — 苏格拉底式提问
-# =========================================================
-def call_ai(user_message: str, skill_name: str, context: dict) -> str:
-    import json
-    max_retries = 3
-    api_key = st.secrets["OPENAI_API_KEY"]
-    client = OpenAI(
-        api_key=api_key,
-        base_url="https://api.videocaptioner.cn/v1",
-    )
-    bars_summary = context.get("bars", [])
-    recent_bars = bars_summary[-15:]
-
-    parts = [
-        "当前训练目标：{}".format(skill_name),
-        "当前在第{}根K线，共{}根。".format(
-            context.get("current_bar", 0), context.get("total_bars", 0)),
-        "",
-        "最近K线数据：",
-    ] + recent_bars
-    if context.get("legs"):
-        parts += ["", "波段："] + context["legs"]
-    if context.get("swings"):
-        parts += ["", "Swing："] + context["swings"]
-    parts.append("")
-    parts.append(user_message)
-
-    full_prompt = "\n".join(parts)
-
-    for attempt in range(max_retries):
-        try:
-            response = client.chat.completions.create(
-                model="gpt-5.4-mini",
-                messages=[
-                    {"role": "system", "content": AI_SYSTEM_PROMPT},
-                    {"role": "user", "content": full_prompt},
-                ],
-                temperature=0.7,
-                max_tokens=300,
-            )
-            return response.choices[0].message.content.strip()
-        except Exception as e:
-            err_str = str(e)
-            # 429 限流：指数退避重试
-            if attempt < max_retries - 1 and ("429" in err_str or "rate" in err_str.lower()):
-                wait = 2 ** (attempt + 1)
-                time.sleep(wait)
-                continue
-            return "AI调用失败: {}".format(e)
-    return "AI调用失败: 请求过于频繁，请稍后再试"
-
-
-def ai_observe(context: dict, skill_name: str) -> str:
-    prompt = (
-        "用户正在训练「{}」。".format(skill_name)
-        + "请指出在这个画面中，用户应该重点观察哪几根K线。"
-        + "只指出K线范围和应该关注什么特征，不要给出结论。"
-    )
-    return call_ai(prompt, skill_name, context)
-
-
-def ai_challenge(answer: str, context: dict, skill_name: str) -> str:
-    prompt = (
-        "训练目标「{}」\n用户的判断：{}\n\n".format(skill_name, answer)
-        + "请针对这个判断提出2-3个追问，帮助用户发现自己可能忽略的地方。"
-    )
-    return call_ai(prompt, skill_name, context)
-
-
-def ai_reveal(context_after: dict, answer: str, skill_name: str) -> str:
-    bars_after = context_after.get("bars", [])[-10:]
-    prompt = (
-        "训练目标「{}」\n用户的判断：{}\n\n".format(skill_name, answer)
-        + "之后走出的K线：\n" + "\n".join(bars_after) + "\n\n"
-        + "价格已经走出来了。请提出2-3个问题，"
-        + "引导学生回顾自己的判断过程，不要直接说对错。"
-    )
-    return call_ai(prompt, skill_name, context_after)
-
-
+def _al(legs, df, start, end, direction, ps, pe):
+    bc = sum(abs(float(df.iloc[i]["close"]) - float(df.iloc[i]["open"]))
+             for i in range(start, end + 1))
+    c = max(end - start + 1, 1)
+    legs.append(Leg(start_idx=start, end_idx=end, direction=direction,
+        bar_count=c, price_start=ps, price_end=pe,
+        price_range=abs(pe - ps), body_avg=bc / c))
 
 # =========================================================
 # 图表
 # =========================================================
-def build_chart(chart_df, swings, legs, bar, show_swings=True, show_legs=True):
+def build_chart(chart_df, bar, hotzones=None, show_swings=False, show_legs=False):
     fig = go.Figure()
-    visible = chart_df.iloc[:bar + 1]
-    if len(visible) == 0:
+    vis = chart_df.iloc[:bar + 1]
+    if len(vis) == 0:
         return fig
-
     fig.add_trace(go.Candlestick(
-        x=visible.index, open=visible["open"], high=visible["high"],
-        low=visible["low"], close=visible["close"],
-        increasing_line_color="#e74c3c", decreasing_line_color="#2ecc71",
-    ))
-
+        x=vis.index, open=vis["open"], high=vis["high"],
+        low=vis["low"], close=vis["close"],
+        increasing_line_color="#e74c3c", decreasing_line_color="#2ecc71"))
     annotations = []
     if show_swings:
-        for s in swings:
+        for s in st.session_state.get("swings", []):
             if hasattr(s, "index") and s.index <= bar:
-                label = "SH" if s.kind == "SH" else "SL"
-                annotations.append(dict(
-                    x=s.index, y=s.price, text=label,
+                lab = "SH" if s.kind == "SH" else "SL"
+                annotations.append(dict(x=s.index, y=s.price, text=lab,
                     showarrow=True, arrowhead=1, arrowcolor="#888",
                     font=dict(size=10, color="#888"),
-                    ax=0, ay=-30 if s.kind == "SH" else 30,
-                ))
-        swing_highs = [(s.index, s.price) for s in swings
-                       if hasattr(s, "kind") and s.kind == "SH" and s.index <= bar]
-        swing_lows = [(s.index, s.price) for s in swings
-                      if hasattr(s, "kind") and s.kind == "SL" and s.index <= bar]
-        if len(swing_highs) >= 2:
-            sx, sy = zip(*sorted(swing_highs))
-            fig.add_trace(go.Scatter(x=sx, y=sy, mode="lines+markers",
-                line=dict(color="#3498db", width=1, dash="dot"),
-                marker=dict(size=3), showlegend=False, hoverinfo="skip"))
-        if len(swing_lows) >= 2:
-            sx, sy = zip(*sorted(swing_lows))
-            fig.add_trace(go.Scatter(x=sx, y=sy, mode="lines+markers",
-                line=dict(color="#e67e22", width=1, dash="dot"),
-                marker=dict(size=3), showlegend=False, hoverinfo="skip"))
-
+                    ax=0, ay=-30 if s.kind == "SH" else 30))
     if show_legs:
-        safe_legs = [l for l in legs if hasattr(l, "end_idx") and l.end_idx <= bar]
-        for leg in safe_legs[-6:]:
-            mid_bar = (leg.start_idx + leg.end_idx) // 2
-            mid_price = (leg.price_start + leg.price_end) / 2
-            label = "多" if leg.direction == "bull" else "空"
-            color = "#8e44ad" if leg.direction == "bull" else "#c0392b"
-            annotations.append(dict(
-                x=mid_bar, y=mid_price,
-                text="{}({}根 {:.0f}pt)".format(label, leg.bar_count, leg.price_range),
-                showarrow=False, font=dict(size=9, color=color),
-            ))
-
+        for leg in [l for l in st.session_state.get("legs", [])
+                    if hasattr(l, "end_idx") and l.end_idx <= bar][-6:]:
+            mb = (leg.start_idx + leg.end_idx) // 2
+            mp = (leg.price_start + leg.price_end) / 2
+            annotations.append(dict(x=mb, y=mp,
+                text="{}({}根 {:.0f}pt)".format(leg.direction, leg.bar_count, leg.price_range),
+                showarrow=False, font=dict(size=9, color="#999")))
     cur = chart_df.iloc[bar]
-    annotations.append(dict(
-        x=bar, y=cur["high"], text="#{}".format(bar),
+    annotations.append(dict(x=bar, y=cur["high"], text="#{}".format(bar),
         showarrow=True, arrowhead=0, arrowcolor="#aaa",
-        font=dict(size=8, color="#aaa"), ax=0, ay=25,
-    ))
-
+        font=dict(size=8, color="#aaa"), ax=0, ay=25))
     fig.update_layout(annotations=annotations, height=520,
         margin=dict(l=20, r=20, t=20, b=20),
         xaxis_rangeslider_visible=False,
         xaxis=dict(showgrid=False, zeroline=False),
         yaxis=dict(showgrid=True, gridcolor="#f5f5f5", zeroline=False),
-        template="plotly_white",
-    )
+        template="plotly_white")
     return fig
 
+# =========================================================
+# GPT 教练 — 与用户共享完整K线环境
+# =========================================================
+def build_context(chart_df, bar, user_observation, skill_name,
+                  behaviors, bar_from, bar_to, profile, history):
+    """构建GPT上下文：完整OHLC + 用户观察 + 能力画像"""
+    start = max(0, bar - 30)
+    recent = []
+    for i in range(start, bar + 1):
+        r = chart_df.iloc[i]
+        recent.append({
+            "bar": i,
+            "open": float(r["open"]),
+            "high": float(r["high"]),
+            "low": float(r["low"]),
+            "close": float(r["close"])
+        })
+
+    ctx = {
+        "current_bar": bar,
+        "total_bars": len(chart_df),
+        "skill": skill_name,
+        "market": recent,
+        "user_judgment": user_observation,
+    }
+    if behaviors:
+        ctx["user_behaviors"] = behaviors
+    if bar_from is not None and bar_to is not None:
+        ctx["user_bar_range"] = [bar_from, bar_to]
+    if profile:
+        ctx["user_weaknesses"] = [
+            {"pattern": w.pattern, "frequency": w.count} for w in profile if w.count > 0]
+    if history:
+        ctx["recent_training"] = [
+            {"bar": h.bar, "skill": SKILLS.get(h.skill_id, {}).get("name", "?"),
+             "judgment": h.judgment}
+            for h in history[-5:]
+        ]
+    return ctx
+
+
+def ask_coach(context, extra_prompt=None):
+    """调用GPT教练"""
+    max_retries = 3
+    api_key = st.secrets["OPENAI_API_KEY"]
+    client = OpenAI(api_key=api_key, base_url="https://api.videocaptioner.cn/v1")
+    user_msg = json.dumps(context, ensure_ascii=False)
+    if extra_prompt:
+        user_msg += "\n\n" + extra_prompt
+    for attempt in range(max_retries):
+        try:
+            resp = client.chat.completions.create(
+                model="gpt-5.4-nano",
+                messages=[
+                    {"role": "system", "content": AI_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_msg},
+                ],
+                temperature=0.4,
+                max_tokens=400,
+            )
+            return resp.choices[0].message.content.strip()
+        except Exception as e:
+            err = str(e)
+            if attempt < max_retries - 1 and ("429" in err or "rate" in err.lower()):
+                time.sleep(2 ** (attempt + 1))
+                continue
+            return "AI调用失败: {}".format(e)
+    return "AI调用失败: 请求过于频繁，请稍后再试"
+
+# =========================================================
+# 用户能力画像
+# =========================================================
+WEAKNESS_PATTERNS = {
+    "conclusion_without_evidence": "结论缺乏依据",
+    "ignore_followthrough": "忽略跟进",
+    "single_bar_focus": "过度关注单根K线",
+    "no_opponent": "忽略对手反应",
+    "no_continuity": "缺乏连续性观察",
+    "premature_reversal": "过早判断转换",
+    "no_acceptance": "忽略接受度",
+    "no_background": "忽略背景",
+}
+
+def detect_weakness(judgment, behaviors):
+    """从用户观察中检测潜在弱点"""
+    full = judgment + " " + " ".join(behaviors)
+    hits = []
+    if behaviors and not judgment.strip():
+        hits.append("conclusion_without_evidence")
+    if len(behaviors) == 0:
+        hits.append("conclusion_without_evidence")
+    if not any(k in full for k in ["跟进", "第二根", "第三根", "后续", "延续"]):
+        hits.append("ignore_followthrough")
+    if re.search(r'第\d+根', judgment) and "到" not in judgment and "-" not in judgment:
+        hits.append("single_bar_focus")
+    if not any(k in full for k in ["对手", "反攻", "反击", "回应", "买方", "卖方"]):
+        hits.append("no_opponent")
+    if not any(k in full for k in ["变化", "连续", "过程", "逐渐", "开始"]):
+        hits.append("no_continuity")
+    if any(k in full for k in ["转换", "反转", "转向"]):
+        if not any(k in full for k in ["跟进", "延续", "持续"]):
+            hits.append("premature_reversal")
+    return hits
+
+
+def update_profile(session, judgment, behaviors):
+    """更新用户能力画像"""
+    hits = detect_weakness(judgment, behaviors)
+    profile = session.get("user_profile", {})
+    for h in hits:
+        if h not in profile:
+            profile[h] = UserWeakness(pattern=WEAKNESS_PATTERNS.get(h, h))
+        profile[h].count += 1
+        if len(profile[h].examples) < 3:
+            profile[h].examples.append(judgment[:60])
+    session["user_profile"] = profile
 
 # =========================================================
 # 训练面板
 # =========================================================
-def render_training(session, bar):
+def render_training(session, bar, chart_df):
     mode = session.get("train_mode", 1)
     skill = SKILLS[mode]
-
     st.markdown("---")
     st.markdown("### 训练 {}/5: {}".format(mode, skill["name"]))
     st.markdown("*{}*".format(skill["question"]))
 
-    answer = st.text_area(
-        "你的判断", height=80,
-        key="answer_{}_{}".format(bar, mode),
-        placeholder="直接写出你的观察和结论...",
-    )
+    # 用户判断
+    judgment = st.text_area(
+        "你的判断", height=55, key="judg_{}_{}".format(bar, mode),
+        placeholder="描述你对当前市场的判断...")
 
+    # K线范围
+    st.markdown("**具体观察：**")
+    c1, c2 = st.columns(2)
+    with c1:
+        bar_from = st.number_input("起始K线", min_value=0, max_value=bar,
+            value=max(0, bar - 10), key="bf_{}_{}".format(bar, mode))
+    with c2:
+        bar_to = st.number_input("结束K线", min_value=0, max_value=bar,
+            value=bar, key="bt_{}_{}".format(bar, mode))
+
+    # 行为观察
+    st.markdown("*你在这个范围内观察到的具体行为变化：*")
     c1, c2, c3 = st.columns(3)
     with c1:
-        submitted = st.button("提交", key="submit_{}_{}".format(bar, mode))
+        b1 = st.text_input("行为1", key="b1_{}_{}".format(bar, mode), placeholder="例如：实体缩小")
     with c2:
-        observe_clicked = st.button("AI: 我该看哪里？", key="obs_{}_{}".format(bar, mode))
+        b2 = st.text_input("行为2", key="b2_{}_{}".format(bar, mode), placeholder="例如：重叠增加")
     with c3:
-        challenge_clicked = st.button("AI: 质疑我的判断", key="chal_{}_{}".format(bar, mode))
+        b3 = st.text_input("行为3", key="b3_{}_{}".format(bar, mode), placeholder="例如：跟进减少")
 
-    chart_df = session.get("chart_df")
-    swings = session.get("swings", [])
-    legs = session.get("legs", [])
-    context = extract_chart_context(chart_df, swings, legs, bar) if chart_df is not None else None
+    # 按钮行
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        submitted = st.button("提交观察", key="submit_{}_{}".format(bar, mode))
+    with c2:
+        observe_btn = st.button("教练: 我该看哪里？", key="obs_{}_{}".format(bar, mode))
+    with c3:
+        challenge_btn = st.button("教练: 质疑我的观察", key="ch_{}_{}".format(bar, mode))
+    with c4:
+        if st.button("教练: 我有什么盲点？", key="blind_{}_{}".format(bar, mode)):
+            profile = session.get("user_profile", {})
+            hits = detect_weakness(judgment.strip(), [b1.strip(), b2.strip(), b3.strip()])
+            if hits:
+                weakness_names = [WEAKNESS_PATTERNS.get(h, h) for h in hits]
+                st.warning("本次检测到的观察盲点：" + "、".join(weakness_names))
+            else:
+                st.success("本次观察暂未检测到明显盲点")
 
-    if submitted and answer.strip():
-        sa = SkillAnswer(
-            skill_id=mode, bar=bar,
-            answer=answer.strip(),
-            timestamp=datetime.now().strftime("%H:%M:%S"),
-        )
-        session.setdefault("answers", []).append(sa)
-        session["last_answer_{}".format(mode)] = answer.strip()
-        session["last_answer_bar_{}".format(mode)] = bar
+    history = session.get("observations", [])
+    profile = session.get("user_profile", {})
+
+    # 提交观察
+    if submitted and judgment.strip():
+        behaviors = [x.strip() for x in [b1, b2, b3] if x.strip()]
+        obs = Observation(
+            skill_id=mode, bar=bar, judgment=judgment.strip(),
+            bar_from=bar_from, bar_to=bar_to,
+            behaviors=behaviors, timestamp=datetime.now().strftime("%H:%M:%S"))
+        session.setdefault("observations", []).append(obs)
+        session["last_judgment_{}".format(mode)] = judgment.strip()
+        session["last_behaviors_{}".format(mode)] = behaviors
+        session["last_obs_bar_{}".format(mode)] = bar
+
+        update_profile(session, judgment.strip(), behaviors)
         st.success("已记录")
 
-    if observe_clicked and context:
-        with st.spinner("AI思考中..."):
-            result = ai_observe(context, skill["name"])
-        st.markdown("**AI教练：**\n{}".format(result))
+    # 教练：我该看哪里？
+    if observe_btn:
+        profile = session.get("user_profile", {})
+        ctx = build_context(chart_df, bar, "", skill["name"], [], None, None, profile, history)
+        extra = "用户请求教练指出应该观察的K线范围。只指向，不解释。"
+        with st.spinner("教练思考中..."):
+            result = ask_coach(ctx, extra)
+        st.markdown("**教练：** " + result)
 
-    if challenge_clicked:
-        last_answer = session.get("last_answer_{}".format(mode), "")
-        if not last_answer:
-            st.warning("请先提交你的判断")
-        elif context:
-            with st.spinner("AI思考中..."):
-                result = ai_challenge(last_answer, context, skill["name"])
-            st.markdown("**AI教练：**\n{}".format(result))
+    # 教练：质疑我的观察
+    if challenge_btn:
+        lj = session.get("last_judgment_{}".format(mode), "")
+        lb = session.get("last_behaviors_{}".format(mode), [])
+        lbf = session.get("last_obs_bar_{}".format(mode))
+        if not lj:
+            st.warning("请先提交你的观察")
+        else:
+            profile = session.get("user_profile", {})
+            # 获取之前的bar范围
+            bf_key = "bf_{}_{}".format(lbf, mode)
+            bt_key = "bt_{}_{}".format(lbf, mode)
+            bf_val = session.get(bf_key, None)
+            bt_val = session.get(bt_key, None)
+            ctx = build_context(chart_df, bar, lj, skill["name"], lb,
+                                bf_val, bt_val, profile, history)
+            extra = "请质疑用户的具体观察。找出可能忽略的地方。"
+            with st.spinner("教练思考中..."):
+                result = ask_coach(ctx, extra)
+            st.markdown("**教练：** " + result)
 
-    # 揭示后回顾
-    last_bar = session.get("last_answer_bar_{}".format(mode))
+    # 教练：回顾之前的判断
+    last_bar = session.get("last_obs_bar_{}".format(mode))
     if last_bar is not None and bar > last_bar + 5:
-        last_answer = session.get("last_answer_{}".format(mode), "")
-        if last_answer:
+        lj = session.get("last_judgment_{}".format(mode), "")
+        if lj:
             st.markdown("---")
-            if st.button("AI: 回顾我之前的判断", key="reveal_{}".format(mode)):
-                if chart_df is not None:
-                    context_after = extract_chart_context(chart_df, swings, legs, bar)
-                    with st.spinner("AI思考中..."):
-                        result = ai_reveal(context_after, last_answer, skill["name"])
-                    st.markdown("**AI回顾：**\n{}".format(result))
-
-
-def render_history(session):
-    answers = session.get("answers", [])
-    if not answers:
-        return
-    with st.expander("训练记录"):
-        by_skill = {}
-        for a in answers:
-            by_skill.setdefault(a.skill_id, []).append(a)
-        for sid in sorted(by_skill.keys()):
-            name = SKILLS[sid]["name"]
-            st.text("[{}] {}次".format(name, len(by_skill[sid])))
-        for a in answers[-8:]:
-            name = SKILLS.get(a.skill_id, {}).get("name", "?")
-            st.text("[{}] #{} {}: {}".format(a.timestamp, a.bar, name, a.answer[:50]))
-
+            if st.button("教练: 回顾我之前的判断", key="reveal_{}".format(mode)):
+                lb = session.get("last_behaviors_{}".format(mode), [])
+                profile = session.get("user_profile", {})
+                ctx = build_context(chart_df, bar, "", skill["name"], [], None, None, profile, history)
+                extra = (
+                    "用户在K{}的判断是：{}\n"
+                    "用户的行为观察：{}\n"
+                    "现在已走到K{}。"
+                    "请引导用户回顾：后续发生了什么变化？"
+                    "不要评价对错。只问关于可观察事实的问题。"
+                ).format(last_bar, lj, "、".join(lb) if lb else "无", bar)
+                with st.spinner("教练思考中..."):
+                    result = ask_coach(ctx, extra)
+                st.markdown("**教练回顾：** " + result)
 
 # =========================================================
-# 主函数
+# 时间轴
+# =========================================================
+def render_timeline(session, bar):
+    tl = session.get("timeline", [])
+    with st.expander("行为变化时间轴 ({}条)".format(len(tl))):
+        for ev in tl:
+            icon = "●" if ev.event_type == "inflection" else "○"
+            st.text("{} [K{}] {} {}".format(icon, ev.bar, ev.timestamp, ev.description))
+        if not tl:
+            st.caption("在Replay中记录你观察到的行为变化")
+        st.markdown("---")
+        c1, c2 = st.columns([3, 1])
+        with c1:
+            new_desc = st.text_input("记录变化", key="tl_{}".format(bar),
+                placeholder="描述这里的行为变化...")
+        with c2:
+            etype = st.selectbox("类型", ["拐点", "观察"], key="tlt_{}_{}".format(bar))
+        if st.button("添加", key="tl_add_{}".format(bar)) and new_desc.strip():
+            tl.append(TimelineEvent(bar=bar, description=new_desc.strip(),
+                event_type="inflection" if etype == "拐点" else "observe",
+                timestamp=datetime.now().strftime("%H:%M:%S")))
+            session["timeline"] = tl
+            st.rerun()
+        if tl and st.button("清空", key="tl_clear"):
+            session["timeline"] = []
+            st.rerun()
+
+# =========================================================
+# 能力画像面板
+# =========================================================
+def render_profile(session):
+    profile = session.get("user_profile", {})
+    if not profile:
+        return
+    with st.expander("能力画像"):
+        sorted_w = sorted(profile.items(), key=lambda x: x[1].count, reverse=True)
+        for key, w in sorted_w[:5]:
+            bar_count = min(w.count, 20)
+            bar_str = "█" * bar_count + "░" * (20 - bar_count)
+            st.text("{}: {} ({}次)".format(w.pattern, bar_str, w.count))
+            for ex in w.examples[-1:]:
+                st.caption("  最近：{}".format(ex))
+
+# =========================================================
+# 训练记录
+# =========================================================
+def render_history(session):
+    observations = session.get("observations", [])
+    if not observations:
+        return
+    with st.expander("训练记录 ({}次)".format(len(observations))):
+        for obs in observations[-8:]:
+            name = SKILLS.get(obs.skill_id, {}).get("name", "?")
+            line = "[{}] K{}-{} {}: {}".format(
+                name, obs.bar_from, obs.bar_to, obs.timestamp, obs.judgment[:35])
+            if obs.behaviors:
+                line += " → " + " | ".join(obs.behaviors)
+            st.text(line)
+
+# =========================================================
+# 主程序
 # =========================================================
 def main():
-    st.set_page_config(page_title="Al Brooks 读盘训练器 V12", layout="wide")
-
-    if "data_loaded" not in st.session_state:
-        st.session_state["data_loaded"] = False
-        st.session_state["answers"] = []
-        st.session_state["train_mode"] = 1
+    for key, default in [
+        ("data_loaded", False), ("observations", []),
+        ("train_mode", 1), ("timeline", []),
+        ("replay_mode", "复盘模式"), ("user_profile", {}),
+    ]:
+        if key not in st.session_state:
+            st.session_state[key] = default
 
     with st.sidebar:
-        st.title("读盘训练器 V12")
-        st.caption("5个训练目标 | AI苏格拉底式教练 | Replay")
+        st.title("读盘训练器 V15")
+        st.caption("教练制 | Replay | 能力画像")
 
         symbol = st.text_input("合约代码", value="rb2510", key="sym")
-        if st.button("加载数据", key="load"):
-            with st.spinner("加载中..."):
-                df = load_data(symbol)
-                if df is not None and len(df) > 0:
-                    new_swings = detect_swings(df)
-                    new_legs = detect_legs(df, new_swings)
-                    st.session_state["chart_df"] = df
-                    st.session_state["swings"] = new_swings
-                    st.session_state["legs"] = new_legs
-                    st.session_state["current_bar"] = min(40, len(df) - 1)
-                    st.session_state["data_loaded"] = True
-                    st.session_state["answers"] = []
-                    st.session_state["train_mode"] = 1
-                    for k in list(st.session_state.keys()):
-                        if k.startswith("last_answer"):
-                            del st.session_state[k]
-                    st.success("{}根K线, {}个波段".format(len(df), len(new_legs)))
-                else:
-                    st.error("加载失败")
+        c_load, c_rand = st.columns(2)
+        with c_load:
+            if st.button("加载数据", key="load"):
+                _do_load(symbol)
+        with c_rand:
+            if st.button("换一段", key="rand_chunk"):
+                _do_load(symbol)
 
         if st.session_state.get("data_loaded"):
             st.markdown("---")
+            st.markdown("**Replay模式：**")
+            st.session_state["replay_mode"] = st.radio(
+                "", ["复盘模式", "严格模式"], key="rm_radio",
+                label_visibility="collapsed",
+                captions=["可回退、快进", "只能+1，不可回退"])
+
             st.markdown("**训练目标：**")
             for sid in range(1, 6):
                 name = SKILLS[sid]["name"]
-                is_active = st.session_state.get("train_mode") == sid
-                btn = ">> {}. {} <<".format(sid, name) if is_active else "{}. {}".format(sid, name)
+                active = st.session_state.get("train_mode") == sid
+                btn = ">> {}. {} <<".format(sid, name) if active else "{}. {}".format(sid, name)
                 if st.button(btn, key="mode_{}".format(sid)):
                     st.session_state["train_mode"] = sid
                     st.rerun()
 
-            answers = st.session_state.get("answers", [])
+            obs_list = st.session_state.get("observations", [])
             st.markdown("---")
-            st.text("总训练: {}次".format(len(answers)))
+            st.text("总观察: {}次".format(len(obs_list)))
+
             st.markdown("---")
-            st.markdown("**标注：**")
-            st.session_state["show_swings"] = st.checkbox("Swing", True, key="cb_sw")
-            st.session_state["show_legs"] = st.checkbox("波段", True, key="cb_lg")
+            st.markdown("**标注（默认关闭）：**")
+            st.session_state["show_swings"] = st.checkbox("Swing点", False, key="cb_sw")
+            st.session_state["show_legs"] = st.checkbox("波段线", False, key="cb_lg")
 
     if not st.session_state.get("data_loaded"):
-        st.markdown("# Al Brooks 读盘训练器 V12")
+        st.markdown("# Al Brooks 读盘训练器 V15")
         st.markdown("")
         for sid in range(1, 6):
             s = SKILLS[sid]
-            st.markdown("**{}. {}** - {}".format(sid, s["name"], s["question"]))
+            st.markdown("**{}. {}** — {}".format(sid, s["name"], s["question"]))
         st.markdown("")
-        st.markdown("> 你看图，你判断。AI只提问，不给答案。")
+        st.markdown("> 你看图。你判断。教练只提问，不给答案。")
+        st.markdown("")
+        st.markdown("**训练架构：**")
+        st.markdown("- 用户 = 真正训练者")
+        st.markdown("- GPT = 教练（与你看同一个盘面）")
+        st.markdown("- 软件 = 训练场")
         return
 
     chart_df = st.session_state["chart_df"]
-    swings = st.session_state["swings"]
-    legs = st.session_state["legs"]
     bar = st.session_state.get("current_bar", 0)
-
     if bar >= len(chart_df):
         bar = len(chart_df) - 1
         st.session_state["current_bar"] = bar
 
-    show_sw = st.session_state.get("show_swings", True)
-    show_lg = st.session_state.get("show_legs", True)
-    chart = build_chart(chart_df, swings, legs, bar, show_swings=show_sw, show_legs=show_lg)
+    show_sw = st.session_state.get("show_swings", False)
+    show_lg = st.session_state.get("show_legs", False)
+    chart = build_chart(chart_df, bar, show_swings=show_sw, show_legs=show_lg)
     st.plotly_chart(chart, use_container_width=True)
 
-    # Replay
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
-    with c1:
-        if st.button("<<-5", key="b_p5"):
-            st.session_state["current_bar"] = max(0, bar - 5); st.rerun()
-    with c2:
-        if st.button("<-1", key="b_p1"):
-            st.session_state["current_bar"] = max(0, bar - 1); st.rerun()
-    with c3:
-        if st.button("+1->", key="b_n1"):
-            st.session_state["current_bar"] = min(len(chart_df)-1, bar+1); st.rerun()
-    with c4:
-        if st.button("+5->", key="b_n5"):
-            st.session_state["current_bar"] = min(len(chart_df)-1, bar+5); st.rerun()
-    with c5:
-        if st.button("+15->", key="b_n15"):
-            st.session_state["current_bar"] = min(len(chart_df)-1, bar+15); st.rerun()
-    with c6:
-        if st.button("末尾", key="b_end"):
-            st.session_state["current_bar"] = len(chart_df)-1; st.rerun()
+    strict = st.session_state.get("replay_mode") == "严格模式"
+    if strict:
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("+1 →", key="b_n1"):
+                st.session_state["current_bar"] = min(len(chart_df) - 1, bar + 1)
+                st.rerun()
+        with c2:
+            pct = bar / max(len(chart_df) - 1, 1)
+            st.progress(pct)
+            st.caption("Replay: {}/{} ({:.0f}%)".format(bar, len(chart_df) - 1, pct * 100))
+    else:
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
+        with c1:
+            if st.button("<<-5", key="b_p5"):
+                st.session_state["current_bar"] = max(0, bar - 5); st.rerun()
+        with c2:
+            if st.button("<-1", key="b_p1"):
+                st.session_state["current_bar"] = max(0, bar - 1); st.rerun()
+        with c3:
+            if st.button("+1->", key="b_n1r"):
+                st.session_state["current_bar"] = min(len(chart_df) - 1, bar + 1); st.rerun()
+        with c4:
+            if st.button("+5->", key="b_n5"):
+                st.session_state["current_bar"] = min(len(chart_df) - 1, bar + 5); st.rerun()
+        with c5:
+            if st.button("+15->", key="b_n15"):
+                st.session_state["current_bar"] = min(len(chart_df) - 1, bar + 15); st.rerun()
+        with c6:
+            if st.button("末尾", key="b_end"):
+                st.session_state["current_bar"] = len(chart_df) - 1; st.rerun()
 
     cur = chart_df.iloc[bar]
     st.caption("#{}/{}  O:{:.1f}  H:{:.1f}  L:{:.1f}  C:{:.1f}  {:+.1f}".format(
-        bar, len(chart_df)-1, cur["open"], cur["high"], cur["low"], cur["close"],
-        cur["close"]-cur["open"]))
+        bar, len(chart_df) - 1, cur["open"], cur["high"], cur["low"], cur["close"],
+        cur["close"] - cur["open"]))
 
-    col_train, col_hist = st.columns([2, 1])
+    col_train, col_tl = st.columns([2, 1])
     with col_train:
-        render_training(st.session_state, bar)
-    with col_hist:
-        render_history(st.session_state)
+        render_training(st.session_state, bar, chart_df)
+    with col_tl:
+        render_timeline(st.session_state, bar)
+        render_profile(st.session_state)
+
+
+def _do_load(symbol):
+    with st.spinner("加载中..."):
+        seed = random.randint(0, 999999)
+        df = load_data(symbol, seed=seed)
+        if df is not None and len(df) > 0:
+            sw = detect_swings(df)
+            lg = detect_legs(df, sw)
+            st.session_state.update({
+                "chart_df": df, "swings": sw, "legs": lg,
+                "current_bar": min(40, len(df) - 1),
+                "data_loaded": True, "observations": [],
+                "timeline": [], "train_mode": 1, "user_profile": {},
+            })
+            for k in list(st.session_state.keys()):
+                if k.startswith("last_"):
+                    del st.session_state[k]
+            st.success("{}根K线".format(len(df)))
+        else:
+            st.error("加载失败")
 
 
 if __name__ == "__main__":
