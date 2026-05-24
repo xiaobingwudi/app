@@ -218,13 +218,14 @@ def build_chart(chart_df, bar, swings):
         showarrow=True, arrowhead=0, arrowcolor="#9399b2",
         font=dict(size=9, color="#6c7086"), ax=0, ay=25))
     fig.update_layout(annotations=ann, height=520,
-        margin=dict(l=15, r=60, t=8, b=5),
+        margin=dict(l=50, r=10, t=8, b=5),
         xaxis_rangeslider_visible=False,
         xaxis=dict(showgrid=False, zeroline=False, tickfont=dict(size=10)),
         yaxis=dict(showgrid=True, gridcolor="#eff1f5", zeroline=False,
-                   tickfont=dict(size=10), side="right"),
+                   tickfont=dict(size=10), side="left"),
         template="plotly_white",
-        font=dict(family="system-ui,sans-serif"))
+        font=dict(family="system-ui,sans-serif"),
+        autosize=True)
     return fig
 
 # =========================================================
