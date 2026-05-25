@@ -292,7 +292,7 @@ class SwingPoint:
 # =========================================================
 # 数据加载
 # =========================================================
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=86400, show_spinner=False)
 def _fetch_raw(symbol):
     try:
         df = ak.futures_zh_minute_sina(symbol=symbol, period="30")
