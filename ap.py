@@ -58,9 +58,9 @@ AI_SYSTEM_PROMPT = """
 5. 理解市场是否接受新价格
 你的重点：不是判断用户答案对错。
 而是观察：
-用户是否：- 回到具体市场行为- 观察连续变化- 注意跟进与失败- 注意对手回应- 区分“行为”和“定义”- 从背景出发观察当前行为
+用户是否：- 回到具体市场行为- 观察连续变化- 注意跟进与失败- 注意对手回应- 区分"行为"和"定义"- 从背景出发观察当前行为
 如果用户：- 提前定义市场- 直接猜方向- 用抽象词代替观察- 跳过行为直接下结论- 忽略市场行为过程，你不要直接给答案。
-你应该：把用户重新拉回：“市场具体做了什么？”
+你应该：把用户重新拉回："市场具体做了什么？"
 你的目标：不是替用户分析市场。而是：帮助用户逐渐形成：符合 Al Brooks 的观察习惯与行为阅读逻辑。
 """
 
@@ -358,7 +358,7 @@ def _market_msg(chart_df, bar, skill_name):
 
 def _gpt(messages):
     api_key = st.secrets["OPENAI_API_KEY"]
-    client = OpenAI(api_key=api_key, base_url="https://www.packyapi.com/v1")
+    client = OpenAI(api_key=api_key, base_url="https://www.right.codes/codex/v1")
     for a in range(3):
         try:
             resp = client.chat.completions.create(
