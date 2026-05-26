@@ -358,11 +358,11 @@ def _market_msg(chart_df, bar, skill_name):
 
 def _gpt(messages):
     api_key = st.secrets["OPENAI_API_KEY"]
-    client = OpenAI(api_key=api_key, base_url="https://api.videocaptioner.cn/v1")
+    client = OpenAI(api_key=api_key, base_url="https://www.packyapi.com/v1")
     for a in range(3):
         try:
             resp = client.chat.completions.create(
-                model="gpt-5.4-mini", messages=messages,
+                model="gpt-5.5", messages=messages,
                 temperature=0.4, max_tokens=400)
             return resp.choices[0].message.content.strip()
         except Exception as e:
