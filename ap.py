@@ -542,7 +542,9 @@ def main():
     with c_nav:
         if st.button("\u4e0b\u4e00\u6839", key="bn1", use_container_width=True):
             cur_bar = st.session_state.get("current_bar", 0)
-            st.session_state["current_bar"] = max(0, min(len(chart_df) - 1, cur_bar + 1))
+            new_bar = max(0, min(len(chart_df) - 1, cur_bar + 1))
+            st.session_state["current_bar"] = new_bar
+            st.session_state["bsl"] = new_bar
             st.rerun()
 
     # ===== Tab 分组 =====
