@@ -536,16 +536,13 @@ def main():
         else:
             def _on_slider():
                 st.session_state["current_bar"] = st.session_state["bsl"]
-            nb = st.slider("", 0, len(chart_df) - 1, bar,
-                           key="bsl", label_visibility="collapsed",
-                           on_change=_on_slider)
+            st.slider("", 0, len(chart_df) - 1, bar,
+                      key="bsl", label_visibility="collapsed",
+                      on_change=_on_slider)
     with c_nav:
-        if st.button("下一根", key="bn1", use_container_width=True):
-            new_bar = min(len(chart_df) - 1, st.session_state["current_bar"] + 1)
-            st.session_state["current_bar"] = new_bar
-            if "bsl" in st.session_state:
-                del st.session_state["bsl"]
-            st.rerun()
+        def _on_next_bar():
+            st.session_state["current_bar"] = min(len(chart_df) - 1, st.session_state["current_bar"] + 1)
+        st.button("下一根", key="bn1", on_click=_on_next_bar, use_container_width=True)
 
     # ===== Tab 分组 =====
     tab_train, tab_dlg, tab_tl = st.tabs([
