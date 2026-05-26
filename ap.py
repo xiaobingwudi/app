@@ -331,7 +331,7 @@ def build_chart(chart_df, bar, swings):
                      xanchor="center", yshift=-12 if chart_df.iloc[idx]["close"] >= chart_df.iloc[idx]["open"] else 12)
                 for idx in range(0, bar + 1, 5)]
     ann.extend(bar_nums)
-    fig.update_layout(annotations=ann, height=360,
+    fig.update_layout(annotations=ann, height=420,
         margin=dict(l=40, r=60, t=10, b=5),
         xaxis_rangeslider_visible=False,
         xaxis=dict(showgrid=False, zeroline=False, tickfont=dict(size=10), showticklabels=False),
@@ -527,7 +527,7 @@ def main():
         '</span>'
     ).format(bar, cur["open"], cur["high"], cur["low"], cur["close"], cc, chg)
 
-    c_info, c_sl, c_nav = st.columns([2, 4, 2], vertical_alignment="center")
+    c_info, c_sl, c_nav = st.columns([2, 4, 1], vertical_alignment="center")
     with c_info:
         st.markdown(ohlc, unsafe_allow_html=True)
     with c_sl:
@@ -540,15 +540,10 @@ def main():
             st.session_state["current_bar"] = nb
             st.rerun()
     with c_nav:
-        nc = st.columns(4)
-        steps = [(-5, "-5", "bp5"), (-1, "-1", "bp1"),
-                 (1, "+1", "bn1"), (5, "+5", "bn5")]
-        for i, (step, label, key) in enumerate(steps):
-            show = not strict or step > 0
-            if show:
-                if nc[i].button(label, key=key, use_container_width=True):
-                    st.session_state["current_bar"] = max(0, min(len(chart_df) - 1, bar + step))
-                    st.rerun()
+        if st.button("\u4e0b\u4e00\u6839", key="bn1", use_container_width=True):
+            cur_bar = st.session_state.get("current_bar", 0)
+            st.session_state["current_bar"] = max(0, min(len(chart_df) - 1, cur_bar + 1))
+            st.rerun()
 
     # ===== Tab 分组 =====
     tab_train, tab_dlg, tab_tl = st.tabs([
