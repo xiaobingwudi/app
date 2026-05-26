@@ -520,7 +520,7 @@ def main():
         '<span class="ohlc">'
         '<b>K{}</b> | '
         'O<b>{:.0f}</b> '
-        'H<b>{:.0g}</b> '
+        'H<b>{:.0f}</b> '
         'L<b>{:.0f}</b> '
         'C<b>{:.0f}</b> '
         '<span class="{}">{:+.0f}</span>'
