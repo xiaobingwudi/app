@@ -541,8 +541,8 @@ def main():
             st.rerun()
     with c_nav:
         nc = st.columns(4)
-        steps = [(-5, "-5", "bp5"), (-1, "-1", "bp1"),
-                 (1, "+1", "bn1"), (5, "+5", "bn5")]
+        steps = [(-1, "-1", "bp1"),
+                 (1, "+1", "bn1")]
         for i, (step, label, key) in enumerate(steps):
             show = not strict or step > 0
             if show:
