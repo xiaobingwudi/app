@@ -450,13 +450,17 @@ def main():
 
             st.markdown("---")
             st.markdown("**训练目标**")
+            def _make_mode_cb(sid):
+                def _cb():
+                    st.session_state["train_mode"] = sid
+                return _cb
             for sid in range(1, 6):
                 name = SKILLS[sid]["name"]
                 pf = "▶ " if st.session_state.get("train_mode") == sid else "  "
-                if st.button("{}{}. {}".format(pf, sid, name),
-                             key="m{}".format(sid), use_container_width=True):
-                    st.session_state["train_mode"] = sid
-                    st.rerun()
+                st.button("{}{}. {}".format(pf, sid, name),
+                          key="m{}".format(sid),
+                          on_click=_make_mode_cb(sid),
+                          use_container_width=True)
 
             st.markdown("---")
             if st.button("结束训练 → 总结",
@@ -527,18 +531,11 @@ def main():
         '</span>'
     ).format(bar, cur["open"], cur["high"], cur["low"], cur["close"], cc, chg)
 
-    c_info, c_sl, c_nav = st.columns([2, 4, 1], vertical_alignment="center")
+    c_info, c_sl, c_nav = st.columns([3, 2, 1], vertical_alignment="center")
     with c_info:
         st.markdown(ohlc, unsafe_allow_html=True)
     with c_sl:
-        if strict:
-            st.markdown("K{}/{}".format(bar, len(chart_df) - 1))
-        else:
-            def _on_slider():
-                st.session_state["current_bar"] = st.session_state["bsl"]
-            st.slider("", 0, len(chart_df) - 1, bar,
-                      key="bsl", label_visibility="collapsed",
-                      on_change=_on_slider)
+        st.markdown("K{} / {}".format(bar, len(chart_df) - 1))
     with c_nav:
         def _on_next_bar():
             st.session_state["current_bar"] = min(len(chart_df) - 1, st.session_state["current_bar"] + 1)
