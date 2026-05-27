@@ -445,8 +445,8 @@ def main():
         if st.session_state.get("data_loaded"):
             st.markdown("---")
             st.session_state["replay_mode"] = st.radio(
-                "Replay", ["复盘模式", "严格模式"],
-                key="rmr", captions=["可回退、快进", "只能+1"])
+                "Replay", [ "严格模式"],
+                key="rmr", captions=[ "只能+1"])
 
             st.markdown("---")
             st.markdown("**训练目标**")
