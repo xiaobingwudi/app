@@ -331,7 +331,7 @@ def build_chart(chart_df, bar, swings):
                      xanchor="center", yshift=-12 if chart_df.iloc[idx]["close"] >= chart_df.iloc[idx]["open"] else 12)
                 for idx in range(0, bar + 1, 5)]
     ann.extend(bar_nums)
-    fig.update_layout(annotations=ann, height=350,
+    fig.update_layout(annotations=ann, height=330,
         margin=dict(l=40, r=60, t=10, b=5),
         xaxis_rangeslider_visible=False,
         xaxis=dict(showgrid=False, zeroline=False, tickfont=dict(size=10), showticklabels=False),
