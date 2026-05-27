@@ -559,7 +559,7 @@ def main():
             key="obs_{}".format(cnt),
             placeholder=skill.get("hints", ""))
 
-        bc = st.columns(4)
+        bc = st.columns(2)
         with bc[0]:
             if st.button("发送观察", key="send_obs",
                          use_container_width=True, type="primary"):
@@ -570,14 +570,6 @@ def main():
                          use_container_width=True):
                 st.session_state["coach_dialogue"] = []
                 st.rerun()
-        with bc[2]:
-            if st.button("记忆测试", key="btn_mem",
-                         use_container_width=True):
-                _do_memory(chart_df, bar)
-        with bc[3]:
-            if st.button("找矛盾", key="btn_con",
-                         use_container_width=True):
-                _do_contra(chart_df, bar, skill)
 
         # 最近一轮对话预览
         dialogue = st.session_state["coach_dialogue"]
