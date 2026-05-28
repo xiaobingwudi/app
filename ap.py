@@ -17,6 +17,7 @@ import time
 import random
 from datetime import datetime
 from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 import streamlit as st
@@ -694,21 +695,35 @@ def _do_contra(chart_df, bar, skill):
     st.rerun()
 
 
-def _load_all_main_contracts(mc):
-    import akshare as ak
-    for ex in ["shfe", "dce", "czce", "cffex", "gfex"]:
+@st.cache_data(ttl=3600, show_spinner=False)
+def _fetch_all_contracts():
+    """并发请求5个交易所主力合约，结果缓存1小时"""
+    def _fetch_one(ex):
         try:
             result = ak.match_main_contract(symbol=ex)
-            contracts = str(result).split(",")
-            for c in contracts:
+            return str(result).split(",")
+        except Exception:
+            return []
+
+    mc = {}
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(_fetch_one, ex): ex
+                   for ex in ["shfe", "dce", "czce", "cffex", "gfex"]}
+        for future in as_completed(futures):
+            for c in future.result():
                 c = c.strip()
                 if len(c) < 3:
                     continue
                 code = "".join(ch for ch in c[:4] if ch.isalpha()).upper()
                 if code in SYMBOL_NAMES and code not in mc:
                     mc[code] = c
-        except Exception:
-            pass
+    return mc
+
+
+def _load_all_main_contracts(mc):
+    """从缓存函数取结果，写入 session_state 的 mc 字典"""
+    result = _fetch_all_contracts()
+    mc.update(result)
 
 def _do_load(sym_code, sym_main):
     with st.spinner("加载中..."):
