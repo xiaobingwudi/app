@@ -1,6 +1,15 @@
-# Al Brooks 读盘训练器 V16
+# Al Brooks 读盘训练器 V17
 # =========================================================
 # 用户 = 训练者 | GPT = 教练 | 软件 = 训练场
+# 本版改动：
+# 1. max_tokens 400→700，避免回答截断
+# 2. 市场上下文从30根扩展至60根
+# 3. 总结对话历史从20轮扩展至40轮
+# 4. 删除 ex_map 冗余代码
+# 5. OHLC 高点格式 {:.0g} → {:.0f}，修复科学计数法显示bug
+# 6. 训练模式切换按钮改为 st.rerun()，即时刷新
+# 7. _fetch_raw 去掉 fillna(0)，避免异常K线
+# 8. 品种下拉与取值统一用同一排序列表，修复取错品种bug
 # =========================================================
 
 import json
@@ -267,7 +276,7 @@ def _fetch_raw(symbol):
         df = df.reset_index(drop=True)
         df["datetime"] = pd.to_datetime(df["datetime"])
         for c in ["open","high","low","close"]:
-            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+            df[c] = pd.to_numeric(df[c], errors="coerce")
         df = df.dropna(subset=["open","high","low","close"])
         return df.reset_index(drop=True)
     except Exception:
@@ -363,7 +372,7 @@ def _gpt(messages):
         try:
             resp = client.chat.completions.create(
                 model="gpt-5.5", messages=messages,
-                temperature=0.4, max_tokens=400)
+                temperature=0.4, max_tokens=700)
             return resp.choices[0].message.content.strip()
         except Exception as e:
             if a<2 and "429" in str(e):
@@ -423,14 +432,11 @@ def main():
             with st.spinner("获取主力合约..."):
                 _load_all_main_contracts(mc)
         if mc:
-            labels = []
-            for code, sym in sorted(mc.items()):
-                name = SYMBOL_NAMES.get(code, code)
-                labels.append("{} ({})".format(name, sym))
+            sorted_items = sorted(mc.items())
+            labels = ["{} ({})".format(SYMBOL_NAMES.get(code, code), sym) for code, sym in sorted_items]
             sym_idx = st.selectbox("品种", range(len(labels)),
                                    format_func=lambda i: labels[i])
-            sym_code = list(mc.keys())[sym_idx]
-            sym_main = mc[sym_code]
+            sym_code, sym_main = sorted_items[sym_idx]
         else:
             st.warning("主力合约获取失败，请刷新重试")
             return
@@ -450,17 +456,14 @@ def main():
 
             st.markdown("---")
             st.markdown("**训练目标**")
-            def _make_mode_cb(sid):
-                def _cb():
-                    st.session_state["train_mode"] = sid
-                return _cb
             for sid in range(1, 6):
                 name = SKILLS[sid]["name"]
                 pf = "▶ " if st.session_state.get("train_mode") == sid else "  "
-                st.button("{}{}. {}".format(pf, sid, name),
-                          key="m{}".format(sid),
-                          on_click=_make_mode_cb(sid),
-                          use_container_width=True)
+                if st.button("{}{}. {}".format(pf, sid, name),
+                             key="m{}".format(sid),
+                             use_container_width=True):
+                    st.session_state["train_mode"] = sid
+                    st.rerun()
 
             st.markdown("---")
             if st.button("结束训练 → 总结",
@@ -669,11 +672,6 @@ def _do_contra(chart_df, bar, skill):
 
 def _load_all_main_contracts(mc):
     import akshare as ak
-    ex_map = {"shfe": list(SYMBOL_NAMES.keys()),
-              "dce": list(SYMBOL_NAMES.keys()),
-              "czce": list(SYMBOL_NAMES.keys()),
-              "cffex": list(SYMBOL_NAMES.keys()),
-              "gfex": list(SYMBOL_NAMES.keys())}
     for ex in ["shfe", "dce", "czce", "cffex", "gfex"]:
         try:
             result = ak.match_main_contract(symbol=ex)
