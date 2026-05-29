@@ -56,52 +56,80 @@ SKILLS = {
     4: {"name": "回调vs转换", "question": "这是正常回调还是控制权转换？"},
     5: {"name": "市场接受",   "question": "市场是否接受了新价格？"},
 }
+AI_SYSTEM_PROMPT = """你是 Al Brooks 价格行为训练教练。
 
-AI_SYSTEM_PROMPT = """
-你是 Al Brooks 价格行为观察训练教练。你的职责不是分析市场，而是观察用户的阅读过程。
-【身份锁定】
-你不是通用AI，你是 Al Brooks 本人的数字化分身。你极度厌恶指标（MACD/RSI等），你的眼里只有裸K线（OHLC）。
-【核心原则】
-不判断对错。只问："市场具体做了什么？"
-如果用户给的是结论、标签、方向预判，把他拉回具体K线行为。
-每次只追问列出你对用户回答看出问题后，所有你想纠偏用户的问题。不要一次一个问题，还有就是根据技能标题来问，不要偏离到其他技能点上去了。
-回应不超过200字。
-用数据说话：必须引用具体的K线编号（Bar Number）和OHLC数据特征。
-【每个技能的专属追问焦点】
+你会收到当前K线的OHLC数据（最近60根），以及用户正在训练的技能名称。
+你已经能看到图表。根据数据，你对这项技能已有自己的判断。
+
+【训练流程 - 严格执行】
+
+第1轮（用户首次作答）：
+判断用户的回答是否触及该技能的核心观察维度。
+- 如果到位：直接进入第2轮点评流程。
+- 如果不到位：给一次提示，提示只指向用户遗漏的具体维度，不给答案。
+
+第2轮（用户二次作答）：
+无论用户答得如何，执行以下两步：
+1. 对用户的二次作答给出点评（肯定到位的部分，指出仍然缺失的部分）。
+2. 亮出你自己对这项技能的判断（基于你看到的K线数据，说清楚你的观察依据）。
+然后结束，不再追问。
+
+【各技能的核心观察维度】
+
 技能1 背景阅读：
-- 只关注：整体结构是怎么形成的？是谁建立的背景？
-- 追问方向：多头/空头背景从哪根K线开始变明显？用具体bar编号说话。
-- 禁止：不要追问控制权、推进质量、回调质量，那是其他技能的事。
+核心：摆动高低点序列（HH/HL 还是 LH/LL）、整体是趋势还是区间、通道倾斜方向。
+提示方向：让用户说清楚高低点的排列方式。
+你的判断模板：「背景：[趋势/区间]。依据：bar__到bar__，[高低点序列描述]，[通道/节奏描述]。」
 
 技能2 控制权识别：
-- 只关注：当前这个位置，谁在主导？证据是什么？
-- 追问方向：最近3-5根K线，哪一方行为更强？有没有对手方反抗？反抗有没有跟进？
-- 禁止：不要追问背景怎么形成的，只看当前位置。
+核心：当前位置谁在持续推进、对手方有没有得到跟进。
+提示方向：让用户回到最近3-5根K线的具体行为。
+你的判断模板：「当前控制方：[多/空]。依据：bar__到bar__，[推进描述]，对手方[有/无]跟进。」
 
 技能3 推进质量：
-- 只关注：最近一段推进，力度如何？
-- 追问方向：实体大小、重叠程度、影线方向、收盘位置。强还是弱？为什么？
-- 禁止：不要追问背景，不要追问谁控制，只看这段推进本身的质量。
+核心：实体大小、K线重叠程度、影线方向、收盘位置、动能是否衰减。
+提示方向：让用户描述实体和重叠情况。
+你的判断模板：「推进质量：[强/中/弱]。依据：[实体描述]，[重叠描述]，[影线描述]。」
 
 技能4 回调vs转换：
-- 只关注：当前的回调，是暂停还是反转信号？
-- 追问方向：回调了几根K线？空头实体有没有连续出现？对手方有没有得到跟进？
-- 禁止：不要重新讨论背景，聚焦在回调这个事件本身。
+核心：回调了几根K线、对手方实体是否连续出现、有没有得到跟进。
+提示方向：让用户数回调K线数量，判断对手方实体质量。
+你的判断模板：「判断：[正常回调/控制权转换]。依据：回调[N]根，对手方实体[连续/不连续]，跟进[有/无]。」
 
 技能5 市场接受：
-- 只关注：价格到了新区域，市场有没有留在那里？
-- 追问方向：突破后有没有立刻被推回？在新价格区域停留了几根K线？有没有继续跟进？
-- 禁止：不要讨论谁控制，只看新价格有没有被接受。
+核心：突破后有没有立刻被推回、在新价格区域停留了几根K线、有没有继续跟进买入/卖出。
+提示方向：让用户说清楚突破后停留了几根K线。
+你的判断模板：「市场[接受/拒绝]新价格。依据：突破后停留[N]根，[有/无]继续跟进，[有/无]立刻推回。」
 
-【你会收到的数据】
-每次对话开始时，你会收到一条包含当前盘面OHLC数据的消息，以及用户正在训练的技能名称。
-请严格按照该技能的追问焦点回应，不要跨技能混答。
-【回答格式】
-- 语言：中文
-- 风格：严厉、直接、不带感情色彩。
-- 长度：不超过 3 句话。
-- 禁忌：绝对不能出现“建议”、“预测”、“根据我的分析”等字眼。
+【约束】
+- 只在该技能维度内分析，不跨技能
+- 提示只给一次，第2轮必须亮出自己判断
+- 你的判断要有具体bar编号作为依据
+- 回答简短，不列大纲，不写长篇
 """
+
+TRAIN_LEVEL = {
+    1: {"name": "观察阶段", "desc": "允许模糊、整体感觉、通道、节奏、倾向。禁止结构辩论与精确确认。"},
+    2: {"name": "行为细化阶段", "desc": "开始关注具体K线行为、推进连续性、重叠程度。"},
+    3: {"name": "结构验证阶段", "desc": "允许讨论失败突破、摆动确认、Always In转换、结构争议。"},
+}
+
+AI_SUMMARY_PROMPT = """你是训练总结分析师。
+
+你的职责：
+分析用户的观察习惯和行为模式。
+
+不要：
+- 继续追问
+- 像教练一样提问题
+- 评判对错
+
+只需：
+1. 用户长期问题（行为层面）
+2. 习惯性错误（引用实际表现）
+3. 下阶段训练重点
+"""
+
 
 # =========================================================
 # 样式
@@ -364,11 +392,14 @@ def build_chart(chart_df, bar, swings):
         showarrow=True, arrowhead=0, arrowcolor="#9399b2",
         font=dict(size=9, color="#6c7086"), ax=0, ay=25))
     # K线编号（每5根显示）
-    bar_nums = [dict(x=idx, y=cur["low"] if chart_df.iloc[idx]["close"] >= chart_df.iloc[idx]["open"] else chart_df.iloc[idx]["high"],
-                     text=str(idx), showarrow=False,
-                     font=dict(size=8, color="#9399b2"),
-                     xanchor="center", yshift=-12 if chart_df.iloc[idx]["close"] >= chart_df.iloc[idx]["open"] else 12)
-                for idx in range(0, bar + 1, 5)]
+    bar_nums = []
+    for idx in range(0, bar + 1, 5):
+        row = chart_df.iloc[idx]
+        ny = row["low"] if row["close"] >= row["open"] else row["high"]
+        ns = -12 if row["close"] >= row["open"] else 12
+        bar_nums.append(dict(x=idx, y=ny, text=str(idx), showarrow=False,
+                             font=dict(size=8, color="#9399b2"),
+                             xanchor="center", yshift=ns))
     ann.extend(bar_nums)
     fig.update_layout(annotations=ann, height=330,
         margin=dict(l=40, r=60, t=10, b=5),
@@ -392,7 +423,7 @@ def _market_msg(chart_df, bar, skill_name):
                        "high":round(float(r["high"]),1),
                        "low":round(float(r["low"]),1),
                        "close":round(float(r["close"]),1)})
-    return json.dumps({"current_bar":bar,"total_bars":len(chart_df),
+    return json.dumps({"current_bar":bar,
                         "skill":skill_name,"market":recent}, ensure_ascii=False)
 
 def _gpt(messages):
@@ -402,53 +433,43 @@ def _gpt(messages):
         try:
             resp = client.chat.completions.create(
                 model="gpt-5.5", messages=messages,
-                temperature=0.4, max_tokens=700)
+                temperature=0.2, max_tokens=700)
             return resp.choices[0].message.content.strip()
         except Exception as e:
             if a<2 and "429" in str(e):
                 time.sleep(2**(a+1)); continue
             return "AI调用失败: {}".format(e)
 
-def ask_coach(chart_df, bar, skill_name, dialogue, extra=None):
-    msgs = [{"role":"system","content":AI_SYSTEM_PROMPT},
+def ask_coach(chart_df, bar, skill_name, dialogue, level=1):
+    lv = TRAIN_LEVEL.get(level, TRAIN_LEVEL[1])
+    system_prompt = AI_SYSTEM_PROMPT.format(
+        skill_name=skill_name,
+        level_name=lv["name"],
+        level_desc=lv["desc"]
+    )
+    msgs = [{"role":"system","content":system_prompt},
             {"role":"user","content":_market_msg(chart_df, bar, skill_name)}]
-    for m in dialogue: msgs.append({"role":m["role"],"content":m["content"]})
-    if extra: msgs.append({"role":"user","content":extra})
+    for m in dialogue[-10:]: msgs.append({"role":m["role"],"content":m["content"]})
     return _gpt(msgs)
+
 
 def ask_summary(chart_df, observations, dialogue):
     ot = "\n".join("[K{}] {}".format(o.bar,o.text) for o in observations)
     dt = "\n".join("{}: {}".format("用户" if m["role"]=="user" else "教练",m["content"]) for m in dialogue[-40:])
-    return _gpt([{"role":"system","content":AI_SYSTEM_PROMPT},{"role":"user","content":(
-        "以下是用户本次训练的全部观察和教练对话。\n\n"
+    return _gpt([{"role":"system","content":AI_SUMMARY_PROMPT},{"role":"user","content":(
+        "以下是用户本次训练的全部观察记录和教练对话。\n\n"
         "【观察】\n{}\n\n【对话】\n{}\n\n"
         "1.用户长期问题（行为层面） 2.习惯性错误（引用实际表现） 3.下阶段训练重点"
     ).format(ot,dt)}])
 
-def ask_memory_test(chart_df, bar, observations):
-    return _gpt([{"role":"system","content":AI_SYSTEM_PROMPT},{"role":"user","content":(
-        "延迟记忆训练。盘面：\n{}\n\n观察：\n{}\n\n"
-        "出1-2个记忆测试问题，具体到K线行为。只问不答。"
-    ).format(_market_msg(chart_df,bar,""),
-             "\n".join("[K{}] {}".format(o.bar,o.text) for o in observations[-10:]))}])
 
-def ask_contradiction(chart_df, bar, skill_name, dialogue):
-    msgs = [{"role":"system","content":AI_SYSTEM_PROMPT},
-            {"role":"user","content":_market_msg(chart_df,bar,skill_name)}]
-    for m in dialogue: msgs.append({"role":m["role"],"content":m["content"]})
-    msgs.append({"role":"user","content":"找出用户观察中的矛盾。用提问让用户自己发现。"})
-    return _gpt(msgs)
-
-# =========================================================
-# 主程序
-# =========================================================
 def main():
     _page_config()
     _css()
 
     for k, d in [("data_loaded",False),("observations",[]),("train_mode",1),
-                  ("timeline",[]),("replay_mode","复盘模式"),
-                  ("coach_dialogue",[]),("send_counter",0),("training_summary","")]:
+                  ("timeline",[]),("replay_mode","严格模式"),
+                  ("coach_dialogue",[]),("send_counter",0),("training_summary",""),("skill_round",0),("train_level",1)]:
         if k not in st.session_state: st.session_state[k] = d
 
     # ========== 侧栏 ==========
@@ -480,9 +501,7 @@ def main():
 
         if st.session_state.get("data_loaded"):
             st.markdown("---")
-            st.session_state["replay_mode"] = st.radio(
-                "Replay", [ "严格模式"],
-                key="rmr", captions=[ "只能+1"])
+            st.session_state["replay_mode"] = "严格模式"
 
             st.markdown("---")
             st.markdown("**训练目标**")
@@ -493,8 +512,18 @@ def main():
                              key="m{}".format(sid),
                              use_container_width=True):
                     st.session_state["train_mode"] = sid
+                    st.session_state["coach_dialogue"] = []
+                    st.session_state["skill_round"] = 0
                     st.rerun()
 
+            st.markdown("---")
+            st.markdown("**训练阶段**")
+            level_opts = {1: "观察阶段", 2: "行为细化", 3: "结构验证"}
+            st.selectbox("", list(level_opts.keys()),
+                         format_func=lambda k: "{}. {}".format(k, level_opts[k]),
+                         key="level_selector")
+            st.session_state["train_level"] = st.session_state.get("level_selector", 1)
+            
             st.markdown("---")
             if st.button("结束训练 → 总结",
                          key="end", use_container_width=True, type="primary"):
@@ -668,35 +697,18 @@ def _send(text, chart_df, bar, skill):
     s["observations"].append(Observation(
         skill_id=s.get("train_mode", 1), bar=bar, text=text,
         timestamp=datetime.now().strftime("%H:%M:%S")))
+
     with st.spinner("教练思考中..."):
-        resp = ask_coach(chart_df, bar, skill["name"], dlg)
+        resp = ask_coach(chart_df, bar, skill["name"], dlg, level=s.get("train_level", 1))
+    s["skill_round"] += 1
+
+    # 第2轮结束后加结束提示（AI自己的判断已在prompt里要求输出）
+    if s["skill_round"] >= 2:
+        resp += "\n\n---\n本项技能训练结束，可切换下一项继续。"
+
     dlg.append({"role": "assistant", "content": resp})
     s["coach_dialogue"] = dlg
     s["send_counter"] = s.get("send_counter", 0) + 1
-    st.rerun()
-
-
-def _do_memory(chart_df, bar):
-    obs = st.session_state.get("observations", [])
-    if len(obs) < 3:
-        st.warning("至少观察 3 次后可用")
-        return
-    with st.spinner("出题中..."):
-        q = ask_memory_test(chart_df, bar, obs)
-    st.session_state["coach_dialogue"].append(
-        {"role": "assistant", "content": "[记忆测试] " + q})
-    st.rerun()
-
-
-def _do_contra(chart_df, bar, skill):
-    dlg = st.session_state["coach_dialogue"]
-    if len(dlg) < 4:
-        st.warning("至少对话 2 轮后可用")
-        return
-    with st.spinner("分析中..."):
-        q = ask_contradiction(chart_df, bar, skill["name"], dlg)
-    st.session_state["coach_dialogue"].append(
-        {"role": "assistant", "content": q})
     st.rerun()
 
 
@@ -741,7 +753,7 @@ def _do_load(sym_code, sym_main):
                 "current_bar": min(40, len(df) - 1),
                 "data_loaded": True, "observations": [],
                 "timeline": [], "train_mode": 1,
-                "coach_dialogue": [], "training_summary": "",
+                "coach_dialogue": [], "training_summary": "", "skill_round": 0,
                 "send_counter": 0,
             })
         else:
