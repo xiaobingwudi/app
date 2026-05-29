@@ -441,12 +441,7 @@ def _gpt(messages):
             return "AI调用失败: {}".format(e)
 
 def ask_coach(chart_df, bar, skill_name, dialogue, level=1):
-    lv = TRAIN_LEVEL.get(level, TRAIN_LEVEL[1])
-    system_prompt = AI_SYSTEM_PROMPT.format(
-        skill_name=skill_name,
-        level_name=lv["name"],
-        level_desc=lv["desc"]
-    )
+    system_prompt = AI_SYSTEM_PROMPT
     msgs = [{"role":"system","content":system_prompt},
             {"role":"user","content":_market_msg(chart_df, bar, skill_name)}]
     for m in dialogue[-10:]: msgs.append({"role":m["role"],"content":m["content"]})
