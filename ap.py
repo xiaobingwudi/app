@@ -428,11 +428,11 @@ def _market_msg(chart_df, bar, skill_name):
 
 def _gpt(messages):
     api_key = st.secrets["OPENAI_API_KEY"]
-    client = OpenAI(api_key=api_key, base_url="https://www.right.codes/codex/v1")
+    client = OpenAI(api_key=api_key, base_url="https://api.videocaptioner.cn/v1")
     for a in range(3):
         try:
             resp = client.chat.completions.create(
-                model="gpt-5.5", messages=messages,
+                model="gpt-5.4-nano-2026-03-17", messages=messages,
                 temperature=0.2, max_tokens=700)
             return resp.choices[0].message.content.strip()
         except Exception as e:
