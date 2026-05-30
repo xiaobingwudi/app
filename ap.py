@@ -2,10 +2,10 @@
 Al Brooks 结构训练器 V19
 ================================
 核心优化：
-  1. 修复数据加载失败问题
-  2. 修复品种代码格式
+  1. 修复真实数据加载问题
+  2. 使用正确的 akshare 接口
   3. 适配 Streamlit Cloud Secrets
-  4. 增加更强的错误处理
+  4. 增加更强的错误处理和重试
 """
 
 import streamlit as st
@@ -23,12 +23,66 @@ import random
 # ── 页面配置 ──────────────────────────────────────────────
 st.set_page_config(page_title="Al Brooks 结构训练器", layout="wide")
 
-# ── 品种分类定义（标准格式）───────────────────────────────
+# ── 品种分类定义（使用标准合约代码）───────────────────────
+# 期货品种代码映射（akshare 需要的格式）
 PRODUCT_CATEGORIES = {
-    "金融": ["IF", "IH", "IC", "IM", "TS", "TF", "T", "TL"],
+    "金融": {"code": "IF", "name": "沪深300股指", "exchange": "cffex"},
+    "金融": {"code": "IH", "name": "上证50股指", "exchange": "cffex"},
+    "金融": {"code": "IC", "name": "中证500股指", "exchange": "cffex"},
+    "金融": {"code": "IM", "name": "中证1000股指", "exchange": "cffex"},
+    "金融": {"code": "T", "name": "10年期国债", "exchange": "cffex"},
+    "有色": {"code": "CU", "name": "沪铜", "exchange": "shfe"},
+    "有色": {"code": "AL", "name": "沪铝", "exchange": "shfe"},
+    "有色": {"code": "ZN", "name": "沪锌", "exchange": "shfe"},
+    "有色": {"code": "PB", "name": "沪铅", "exchange": "shfe"},
+    "有色": {"code": "NI", "name": "沪镍", "exchange": "shfe"},
+    "有色": {"code": "SN", "name": "沪锡", "exchange": "shfe"},
+    "有色": {"code": "AU", "name": "黄金", "exchange": "shfe"},
+    "有色": {"code": "AG", "name": "白银", "exchange": "shfe"},
+    "黑色": {"code": "RB", "name": "螺纹钢", "exchange": "shfe"},
+    "黑色": {"code": "HC", "name": "热轧卷板", "exchange": "shfe"},
+    "黑色": {"code": "I", "name": "铁矿石", "exchange": "dce"},
+    "黑色": {"code": "JM", "name": "焦煤", "exchange": "dce"},
+    "黑色": {"code": "J", "name": "焦炭", "exchange": "dce"},
+    "化工": {"code": "V", "name": "PVC", "exchange": "dce"},
+    "化工": {"code": "PP", "name": "聚丙烯", "exchange": "dce"},
+    "化工": {"code": "L", "name": "聚乙烯", "exchange": "dce"},
+    "化工": {"code": "TA", "name": "PTA", "exchange": "czce"},
+    "化工": {"code": "MA", "name": "甲醇", "exchange": "czce"},
+    "化工": {"code": "RU", "name": "橡胶", "exchange": "shfe"},
+    "化工": {"code": "BU", "name": "沥青", "exchange": "shfe"},
+    "化工": {"code": "FU", "name": "燃料油", "exchange": "shfe"},
+    "化工": {"code": "EG", "name": "乙二醇", "exchange": "dce"},
+    "化工": {"code": "EB", "name": "苯乙烯", "exchange": "dce"},
+    "化工": {"code": "PG", "name": "液化气", "exchange": "dce"},
+    "化工": {"code": "SA", "name": "纯碱", "exchange": "czce"},
+    "化工": {"code": "UR", "name": "尿素", "exchange": "czce"},
+    "化工": {"code": "PF", "name": "短纤", "exchange": "czce"},
+    "农产品": {"code": "M", "name": "豆粕", "exchange": "dce"},
+    "农产品": {"code": "Y", "name": "豆油", "exchange": "dce"},
+    "农产品": {"code": "P", "name": "棕榈油", "exchange": "dce"},
+    "农产品": {"code": "A", "name": "豆一", "exchange": "dce"},
+    "农产品": {"code": "B", "name": "豆二", "exchange": "dce"},
+    "农产品": {"code": "C", "name": "玉米", "exchange": "dce"},
+    "农产品": {"code": "CS", "name": "玉米淀粉", "exchange": "dce"},
+    "农产品": {"code": "JD", "name": "鸡蛋", "exchange": "dce"},
+    "农产品": {"code": "AP", "name": "苹果", "exchange": "czce"},
+    "农产品": {"code": "CF", "name": "棉花", "exchange": "czce"},
+    "农产品": {"code": "SR", "name": "白糖", "exchange": "czce"},
+    "农产品": {"code": "OI", "name": "菜油", "exchange": "czce"},
+    "农产品": {"code": "RM", "name": "菜粕", "exchange": "czce"},
+    "农产品": {"code": "LH", "name": "生猪", "exchange": "dce"},
+    "能源": {"code": "SC", "name": "原油", "exchange": "ine"},
+    "能源": {"code": "LU", "name": "低硫燃油", "exchange": "ine"},
+    "能源": {"code": "NR", "name": "20号胶", "exchange": "ine"},
+}
+
+# 重新组织分类显示
+DISPLAY_CATEGORIES = {
+    "金融": ["IF", "IH", "IC", "IM", "T"],
     "有色": ["CU", "AL", "ZN", "PB", "NI", "SN", "AU", "AG"],
     "黑色": ["RB", "HC", "I", "JM", "J"],
-    "化工": ["V", "PP", "TA", "MA", "RU", "BU", "FU", "EG", "EB", "PG", "SA", "UR", "PF"],
+    "化工": ["V", "PP", "L", "TA", "MA", "RU", "BU", "FU", "EG", "EB", "PG", "SA", "UR", "PF"],
     "农产品": ["M", "Y", "P", "A", "B", "C", "CS", "JD", "AP", "CF", "SR", "OI", "RM", "LH"],
     "能源": ["SC", "LU", "NR"],
 }
@@ -47,14 +101,12 @@ SKILLS = [
 def get_ai_config():
     """安全获取AI配置"""
     try:
-        # 方式1: 使用 [ai] 节
         if "ai" in st.secrets:
             return {
                 "base_url": st.secrets["ai"].get("base_url", "https://api.deepseek.com/v1"),
                 "api_key": st.secrets["ai"].get("api_key", ""),
                 "model": st.secrets["ai"].get("model", "deepseek-chat"),
             }
-        # 方式2: 直接读取
         else:
             return {
                 "base_url": st.secrets.get("OPENAI_BASE_URL", "https://api.deepseek.com/v1"),
@@ -126,10 +178,14 @@ def _market_msg(kline_df: pd.DataFrame, n_bars: int = 40) -> str:
     if len(df) < 5:
         return "数据不足"
 
-    o = df["Open"].values if "Open" in df.columns else df["open"].values
-    h = df["High"].values if "High" in df.columns else df["high"].values
-    l = df["Low"].values if "Low" in df.columns else df["low"].values
-    c = df["Close"].values if "Close" in df.columns else df["close"].values
+    # 统一列名
+    if "open" in df.columns:
+        df = df.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close"})
+    
+    o = df["Open"].values
+    h = df["High"].values
+    l = df["Low"].values
+    c = df["Close"].values
     n = len(df)
 
     lines = [f"【当前K线】第{n}号K线", "", "【最近行情描述】"]
@@ -230,87 +286,100 @@ def ask_coach(
             "content": f"【第1轮】当前技能：「{skill_name}」，核心提问：「{skill_question}」。\n请描述当前市场结构，并提出引导性问题。"
         })
 
-    try:
-        resp = client.chat.completions.create(
-            model=AI_CONFIG["model"],
-            messages=messages,
-            temperature=0.3,
-            max_tokens=800,
-        )
-        return resp.choices[0].message.content
-    except Exception as e:
-        return f"[AI调用失败] {str(e)}"
-
-
-# ── 数据获取（带重试和降级）────────────────────────────
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_kline_data(symbol: str, period: str = "30"):
-    """获取K线数据，带重试机制"""
     for attempt in range(3):
         try:
-            # 尝试直接获取
+            resp = client.chat.completions.create(
+                model=AI_CONFIG["model"],
+                messages=messages,
+                temperature=0.3,
+                max_tokens=800,
+            )
+            return resp.choices[0].message.content
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(2)
+                continue
+            return f"[AI调用失败] {str(e)}"
+    
+    return "[AI调用失败] 未知错误"
+
+
+# ── 真实数据获取（使用 akshare 正确接口）────────────────
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_realtime_data(symbol: str, period: str = "30"):
+    """
+    获取真实期货K线数据
+    period: 1, 5, 15, 30, 60 分钟
+    """
+    for attempt in range(3):
+        try:
+            # 方法1: 使用 futures_zh_minute_sina
             df = ak.futures_zh_minute_sina(symbol=symbol, period=period)
             
-            if df is None or df.empty:
-                # 尝试其他格式
-                symbol_alt = symbol + "0" if not symbol.endswith("0") else symbol[:-1]
-                df = ak.futures_zh_minute_sina(symbol=symbol_alt, period=period)
-            
             if df is not None and not df.empty:
-                # 统一列名
-                rename_map = {
-                    "date": "datetime", "datetime": "datetime",
-                    "open": "Open", "Open": "Open",
-                    "high": "High", "High": "High",
-                    "low": "Low", "Low": "Low",
-                    "close": "Close", "Close": "Close",
-                    "volume": "Volume", "Volume": "Volume",
-                }
-                df = df.rename(columns=rename_map)
-                
-                # 确保有datetime列
-                if "datetime" not in df.columns:
-                    df["datetime"] = pd.date_range(end=pd.Timestamp.now(), periods=len(df), freq="30min")
-                
-                df["datetime"] = pd.to_datetime(df["datetime"])
-                df = df.sort_values("datetime").reset_index(drop=True)
-                return df
+                # 处理返回的数据
+                if isinstance(df, pd.DataFrame):
+                    # 重命名列
+                    rename_dict = {}
+                    for old_name in df.columns:
+                        if 'date' in old_name.lower() or 'datetime' in old_name.lower():
+                            rename_dict[old_name] = 'datetime'
+                        elif 'open' in old_name.lower():
+                            rename_dict[old_name] = 'open'
+                        elif 'high' in old_name.lower():
+                            rename_dict[old_name] = 'high'
+                        elif 'low' in old_name.lower():
+                            rename_dict[old_name] = 'low'
+                        elif 'close' in old_name.lower():
+                            rename_dict[old_name] = 'close'
+                        elif 'volume' in old_name.lower():
+                            rename_dict[old_name] = 'volume'
+                    
+                    df = df.rename(columns=rename_dict)
+                    
+                    # 确保有必要的列
+                    required_cols = ['datetime', 'open', 'high', 'low', 'close']
+                    if all(col in df.columns for col in required_cols):
+                        # 转换数据类型
+                        for col in ['open', 'high', 'low', 'close']:
+                            df[col] = pd.to_numeric(df[col], errors='coerce')
+                        df['datetime'] = pd.to_datetime(df['datetime'])
+                        df = df.dropna(subset=required_cols)
+                        df = df.sort_values('datetime').reset_index(drop=True)
+                        return df
+            
+            # 方法2: 使用期货主力合约行情
+            if attempt == 1:
+                main_contract = ak.match_main_contract(symbol=symbol)
+                if main_contract:
+                    df = ak.futures_zh_minute_sina(symbol=main_contract, period=period)
+                    if df is not None and not df.empty:
+                        return df
+            
+            # 方法3: 尝试更短周期
+            if attempt == 2:
+                period_alt = "15" if period == "30" else period
+                df = ak.futures_zh_minute_sina(symbol=symbol, period=period_alt)
+                if df is not None and not df.empty:
+                    return df
+                        
         except Exception as e:
             if attempt < 2:
                 time.sleep(1)
                 continue
-            st.warning(f"尝试 {attempt + 1} 次后仍无法加载 {symbol}: {str(e)}")
     
     return None
 
 
-# ── 备用数据生成器（当真实数据不可用时）─────────────────
-def generate_mock_data(symbol: str, n_bars: int = 100):
-    """生成模拟数据用于演示"""
-    np.random.seed(hash(symbol) % 10000)
-    dates = pd.date_range(end=pd.Timestamp.now(), periods=n_bars, freq="30min")
-    
-    price = 4000
-    prices = [price]
-    for _ in range(n_bars - 1):
-        change = np.random.randn() * 10
-        price += change
-        prices.append(price)
-    
-    # 生成OHLC
-    close = np.array(prices)
-    open_price = close + np.random.randn(n_bars) * 5
-    high = np.maximum(open_price, close) + np.random.rand(n_bars) * 8
-    low = np.minimum(open_price, close) - np.random.rand(n_bars) * 8
-    
-    return pd.DataFrame({
-        "datetime": dates,
-        "Open": open_price,
-        "High": high,
-        "Low": low,
-        "Close": close,
-        "Volume": np.random.randint(1000, 10000, n_bars),
-    })
+def get_main_contract(symbol: str) -> str:
+    """获取主力合约代码"""
+    try:
+        main = ak.match_main_contract(symbol=symbol)
+        if main:
+            return main
+    except Exception:
+        pass
+    return symbol
 
 
 # ── 图表绘制 ────────────────────────────────────────────
@@ -322,6 +391,10 @@ def plot_kline(kline_df: pd.DataFrame, n_bars: int = 40):
     df = kline_df.tail(n_bars).copy()
     if len(df) < 5:
         return go.Figure()
+
+    # 统一列名
+    if "open" in df.columns:
+        df = df.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close"})
 
     fig = make_subplots(
         rows=2, cols=1,
@@ -344,11 +417,12 @@ def plot_kline(kline_df: pd.DataFrame, n_bars: int = 40):
         row=1, col=1,
     )
 
-    colors = ["#ef5350" if row["Close"] >= row["Open"] else "#26a69a" for _, row in df.iterrows()]
-    fig.add_trace(
-        go.Bar(x=df["datetime"], y=df["Volume"], name="成交量", marker_color=colors, opacity=0.5),
-        row=2, col=1,
-    )
+    if "Volume" in df.columns:
+        colors = ["#ef5350" if row["Close"] >= row["Open"] else "#26a69a" for _, row in df.iterrows()]
+        fig.add_trace(
+            go.Bar(x=df["datetime"], y=df["Volume"], name="成交量", marker_color=colors, opacity=0.5),
+            row=2, col=1,
+        )
 
     # K线编号
     for idx, (_, row) in enumerate(df.iterrows()):
@@ -384,7 +458,7 @@ defaults = {
     "kline_data": None,
     "current_symbol": "RB",
     "train_level": "level1",
-    "use_mock": False,
+    "load_error": None,
 }
 for key, default in defaults.items():
     if key not in st.session_state:
@@ -399,7 +473,7 @@ with st.sidebar:
 
     current_symbol = st.session_state.current_symbol
 
-    for cat_name, symbols in PRODUCT_CATEGORIES.items():
+    for cat_name, symbols in DISPLAY_CATEGORIES.items():
         expanded = cat_name in DEFAULT_EXPANDED
         with st.expander(cat_name, expanded=expanded):
             cols = st.columns(min(4, len(symbols)))
@@ -411,13 +485,8 @@ with st.sidebar:
                     st.session_state.kline_data = None
                     st.session_state.chat_history = []
                     st.session_state.skill_round = 1
+                    st.session_state.load_error = None
                     st.rerun()
-
-    st.markdown("---")
-
-    # 数据源状态
-    if st.session_state.use_mock:
-        st.warning("📡 使用演示数据")
 
     st.markdown("---")
 
@@ -451,6 +520,8 @@ with st.sidebar:
     # 数据状态
     if st.session_state.kline_data is not None:
         st.caption(f"📊 {len(st.session_state.kline_data)} 根K线")
+    elif st.session_state.load_error:
+        st.error(st.session_state.load_error)
     else:
         st.caption("⚡ 等待加载数据")
 
@@ -480,36 +551,40 @@ if st.session_state.current_skill:
 
 # 数据加载
 if not st.session_state.data_loaded:
-    with st.spinner(f"加载 {st.session_state.current_symbol} 数据..."):
-        df = fetch_kline_data(st.session_state.current_symbol, period="30")
-        
-        if df is None or df.empty:
-            # 使用演示数据
-            st.warning(f"无法获取 {st.session_state.current_symbol} 的真实数据，使用演示数据")
-            df = generate_mock_data(st.session_state.current_symbol, 200)
-            st.session_state.use_mock = True
-        else:
-            st.session_state.use_mock = False
+    with st.spinner(f"加载 {st.session_state.current_symbol} 真实数据..."):
+        df = fetch_realtime_data(st.session_state.current_symbol, period="30")
         
         if df is not None and len(df) > 0:
             st.session_state.kline_data = df
             st.session_state.data_loaded = True
+            st.session_state.load_error = None
             st.rerun()
         else:
-            st.error(f"数据加载失败: {st.session_state.current_symbol}")
+            error_msg = f"无法加载 {st.session_state.current_symbol} 数据。请检查网络或稍后重试。"
+            st.session_state.load_error = error_msg
+            st.error(error_msg)
+            
+            # 显示可能的解决方案
+            with st.expander("查看解决方案"):
+                st.markdown("""
+                1. **检查网络连接**：确保 Streamlit Cloud 可以访问外网
+                2. **更换品种**：尝试其他品种（如 RB、M、Y 等主流品种）
+                3. **稍后重试**：数据源可能有临时问题
+                4. **本地测试**：先在本地运行确认代码正常
+                """)
 
 # 图表区
 if st.session_state.data_loaded and st.session_state.kline_data is not None:
     fig = plot_kline(st.session_state.kline_data, n_bars)
     st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True})
-else:
-    st.info("请从左侧选择品种开始训练")
 
 st.markdown("---")
 
 # 对话区
 if st.session_state.current_skill is None:
     st.info("👈 从左侧选择品种、阶段和技能开始训练")
+elif not st.session_state.data_loaded:
+    st.warning("⚠️ 请等待数据加载完成，或切换其他品种")
 else:
     skill = st.session_state.current_skill
 
@@ -574,6 +649,7 @@ st.markdown(
     section[data-testid="stSidebar"] > div { padding: 0.5rem !important; }
     hr { margin: 6px 0 !important; }
     .stPlotlyChart { margin: 0 !important; }
+    .stAlert { margin: 10px 0; }
 </style>
 """,
     unsafe_allow_html=True,
