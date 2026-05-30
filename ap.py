@@ -46,9 +46,9 @@ SKILLS = [
 
 # ── AI配置 ────────────────────────────────────────────
 AI_CONFIG = {
-    "base_url": st.secrets["ai"]["base_url"],
-    "api_key":  st.secrets["ai"]["api_key"],
-    "model":    st.secrets["ai"]["model"],
+    "base_url": "https://api.deepseek.com",
+    "api_key":  st.secrets["AI_API_KEY"],
+    "model":    "deepseek-chat",
 }
 
 # ── 训练阶段配置 ─────────────────────────────────────────
