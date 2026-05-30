@@ -1,6 +1,7 @@
 """
-Al Brooks 结构训练器 V21
-修复关键：改用 st.selectbox 下拉框选择技能 → 永远不换行、不被图表遮挡
+Al Brooks 结构训练器 V20
+修复关键：改用 st.radio(horizontal=True) 替代 st.columns(5) + st.button
+彻底解决按钮被图表覆盖或滚动出视口的问题
 """
 import json, time, random
 from datetime import datetime, date
@@ -61,10 +62,7 @@ SKILLS = [
     {"id": 4, "name": "回调vs转换", "question": "这是正常回调还是控制权转换？"},
     {"id": 5, "name": "市场接受",   "question": "市场是否接受了新价格？"},
 ]
-# 下拉选项： "1. 背景阅读 — 当前市场背景是什么？" 这样的格式
-SKILL_OPTIONS = [
-    f"{s['id']}. {s['name']} — {s['question']}" for s in SKILLS
-]
+SKILL_NAMES = [s["name"] for s in SKILLS]
 
 # ── AI Prompt 模板 ──────────────────────────────────────
 AI_SYSTEM_PROMPT_TEMPLATE = """你是一个Al Brooks价格行为交易教练，当前训练阶段为「{level_name}」：{level_desc}
@@ -343,7 +341,7 @@ for key, default in [
     ("kline_data", None),
     ("main_contract", None),
     ("structural_features", {}),
-    ("prev_skill_option", None),
+    ("prev_skill_name", None),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -352,42 +350,38 @@ for key, default in [
 #  主界面
 # ═══════════════════════════════════════════════════════════
 
-# ── 区块1: 技能选择（下拉框，永不换行） ────────────
+# ── 区块1: 技能选择区（改用 st.radio horizontal） ───
 st.markdown("### 选择技能目的")
-selected_option = st.selectbox(
-    "", SKILL_OPTIONS, index=None,
-    placeholder="点击选择技能...",
+selected_skill_name = st.radio(
+    "",  # 隐藏标签
+    SKILL_NAMES,
+    horizontal=True,
+    index=None,
     label_visibility="collapsed",
 )
 
 # 检测技能切换
-if selected_option is not None and selected_option != st.session_state.prev_skill_option:
-    # 解析选中的技能
-    skill_id = int(selected_option.split(".")[0])
-    skill_obj = next(s for s in SKILLS if s["id"] == skill_id)
+if selected_skill_name is not None:
+    # 找到对应的skill对象
+    skill_obj = next(s for s in SKILLS if s["name"] == selected_skill_name)
 
-    if st.session_state.prev_skill_option is not None:
-        prev_id = int(st.session_state.prev_skill_option.split(".")[0])
-        if prev_id == skill_id:
-            # 同一技能 → 第2轮
-            st.session_state.skill_round = 2
-        else:
-            st.session_state.current_skill = skill_obj
-            st.session_state.last_skill_id = skill_id
-            st.session_state.skill_round = 1
+    if st.session_state.prev_skill_name == selected_skill_name:
+        # 同一技能再次点击 → 第2轮
+        st.session_state.skill_round = 2
     else:
+        # 切换技能 → 第1轮
         st.session_state.current_skill = skill_obj
-        st.session_state.last_skill_id = skill_id
+        st.session_state.last_skill_id = skill_obj["id"]
         st.session_state.skill_round = 1
 
-    st.session_state.prev_skill_option = selected_option
+    st.session_state.prev_skill_name = selected_skill_name
 
 # 显示当前技能状态
 if st.session_state.current_skill:
     skill = st.session_state.current_skill
     round_label = "第1轮(引导)" if st.session_state.skill_round == 1 else "第2轮(点评)"
     st.caption(
-        f"当前技能: {skill['name']} — {skill['question']} | "
+        f"当前技能: {skill['name']} - {skill['question']} | "
         f"阶段: {level_name} | {round_label}"
     )
 
@@ -421,7 +415,7 @@ st.markdown("---")
 
 # ── 区块3: 对话区 ────────────────────────────────────
 if st.session_state.current_skill is None:
-    st.info("👆 从上方下拉框选择技能目的开始训练")
+    st.info("👆 选择上方的技能目的开始训练")
 else:
     skill = st.session_state.current_skill
     is_round2 = st.session_state.skill_round == 2
@@ -432,11 +426,7 @@ else:
             st.markdown(msg["content"])
 
     # 第1轮：自动生成AI引导
-    has_guide = any(
-        m["role"] == "assistant" and "当前技能目的" in m.get("content", "")
-        for m in st.session_state.chat_history[-5:]
-    )
-    if not is_round2 and not has_guide:
+    if not is_round2 and not any(m["role"] == "assistant" for m in st.session_state.chat_history[-3:] if "引导" in m.get("content", "")):
         with st.chat_message("assistant"):
             with st.spinner("AI思考中..."):
                 market_msg = _market_msg(st.session_state.kline_data)
@@ -480,6 +470,17 @@ st.markdown(
 <style>
     .stApp { margin: 0; padding: 0; }
     .block-container { padding: 0.8rem 2rem 0.8rem 2rem !important; max-width: 100%; }
+    /* radio 按钮水平紧凑排列 */
+    div[data-testid="stHorizontalRadio"] label {
+        padding: 0.2rem 0.6rem !important;
+        font-size: 0.85rem !important;
+        min-height: unset !important;
+        margin-right: 4px !important;
+    }
+    div[data-testid="stHorizontalRadio"] {
+        gap: 2px !important;
+        flex-wrap: nowrap !important;
+    }
     section[data-testid="stSidebar"] > div { padding: 0.5rem !important; }
     section[data-testid="stSidebar"] .block-container { padding: 0.5rem !important; }
     hr { margin: 6px 0 !important; }
