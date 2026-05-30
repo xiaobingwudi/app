@@ -1,6 +1,6 @@
 """
-Al Brooks 结构训练器 V28
-修复：兼容各种st.secrets格式 + 显示可用key名帮助诊断
+Al Brooks 结构训练器 V26
+修复：适配 akshare 返回的中文/英文列名 + 去除静默try/except
 """
 import json, time, random, traceback
 from datetime import datetime, date
@@ -36,68 +36,12 @@ SKILLS = [
     {"id": 5, "name": "市场接受",   "question": "市场是否接受了新价格？"},
 ]
 
-# ── AI配置（兼容各种secrets格式） ────────────────────
-def _get_ai_config():
-    """从secrets读取AI配置，兼容多种格式"""
-    config = {"base_url": "https://api.deepseek.com/v1", "api_key": "", "model": "deepseek-chat"}
-
-    # 尝试所有可能的secrets结构
-    try_paths = [
-        # 嵌套 [ai] 结构
-        lambda: {"base_url": st.secrets["ai"]["base_url"], "api_key": st.secrets["ai"]["api_key"], "model": st.secrets["ai"]["model"]},
-        # 嵌套 [openai] 结构
-        lambda: {"base_url": st.secrets["openai"]["base_url"], "api_key": st.secrets["openai"]["api_key"], "model": st.secrets["openai"]["model"]},
-        # 扁平结构
-        lambda: {"base_url": st.secrets["base_url"], "api_key": st.secrets["api_key"], "model": st.secrets["model"]},
-        # 仅api_key扁平
-        lambda: {"base_url": config["base_url"], "api_key": st.secrets["api_key"], "model": config["model"]},
-        # OPENAI_API_KEY风格
-        lambda: {"base_url": st.secrets.get("OPENAI_BASE_URL", config["base_url"]), "api_key": st.secrets["OPENAI_API_KEY"], "model": st.secrets.get("OPENAI_MODEL", config["model"])},
-    ]
-
-    for try_fn in try_paths:
-        try:
-            result = try_fn()
-            if result.get("api_key"):
-                return result
-        except (KeyError, TypeError):
-            continue
-
-    # 全部失败 → 显示secrets中的所有key名（不暴露值）
-    available_keys = []
-    try:
-        for k in st.secrets.keys():
-            v = st.secrets[k]
-            if isinstance(v, dict):
-                for sk in v.keys():
-                    available_keys.append(f"st.secrets[\"{k}\"][\"{sk}\"]")
-            else:
-                available_keys.append(f"st.secrets[\"{k}\"]")
-    except Exception:
-        pass
-
-    msg = "❌ 未找到API Key配置\n\n"
-    msg += "请在 Streamlit Cloud 的 Secrets 中添加以下任一格式：\n\n"
-    msg += "```toml\n"
-    msg += "# 格式1（推荐）：\n"
-    msg += '[ai]\n'
-    msg += 'base_url = "https://api.deepseek.com/v1"\n'
-    msg += 'api_key = "sk-你的key"\n'
-    msg += 'model = "deepseek-chat"\n'
-    msg += "\n"
-    msg += "# 格式2（扁平）：\n"
-    msg += 'api_key = "sk-你的key"\n'
-    msg += 'base_url = "https://api.deepseek.com/v1"\n'
-    msg += 'model = "deepseek-chat"\n'
-    msg += "```\n"
-
-    if available_keys:
-        msg += f"\n当前secrets中的key名：\n" + "\n".join(f"- `{k}`" for k in available_keys)
-
-    st.error(msg)
-    st.stop()
-
-AI_CONFIG = _get_ai_config()
+# ── AI配置（从Streamlit Cloud Secrets读取） ────────────
+AI_CONFIG = {
+    "base_url": st.secrets["ai"]["base_url"],
+    "api_key": st.secrets["ai"]["api_key"],
+    "model": st.secrets["ai"]["model"],
+}
 
 # ── 侧栏 ────────────────────────────────────────────────
 with st.sidebar:
@@ -315,6 +259,7 @@ def ask_coach(
 # ── 数据获取 ──────────────────────────────────────────
 def load_data(symbol: str = "RB0"):
     """加载期货数据，适配中文/英文列名"""
+    # 1. 获取分钟数据
     try:
         df = ak.futures_zh_minute_sina(symbol=symbol, period="60")
     except Exception as e:
@@ -325,8 +270,10 @@ def load_data(symbol: str = "RB0"):
         st.error(f"❌ {symbol} 返回数据为空")
         return None, None
 
+    # 2. 统一列名（中文→英文）
     df = _normalize_columns(df)
 
+    # 3. 检查关键列是否存在
     required_cols = ["date", "Open", "High", "Low", "Close", "Volume"]
     missing = [c for c in required_cols if c not in df.columns]
     if missing:
@@ -335,12 +282,14 @@ def load_data(symbol: str = "RB0"):
 
     df["date"] = pd.to_datetime(df["date"])
 
+    # 4. 获取主力合约
     try:
         main_code = ak.match_main_contract(symbol=symbol)
     except Exception as e:
         st.warning(f"主力合约查询失败: {e}，使用全部数据")
         main_code = None
 
+    # 5. 筛选主力合约数据
     if main_code and main_code in df["symbol"].values:
         df_main = df[df["symbol"] == main_code].copy()
     else:
@@ -508,7 +457,7 @@ if not st.session_state.data_loaded:
             st.session_state.data_loaded = True
             st.session_state.data_error = None
         else:
-            st.session_state.data_error = "数据加载失败"
+            st.session_state.data_error = "数据加载失败，请检查控制台日志"
 
 # ── 图表区 ──────────────────────────────────────────
 if st.session_state.data_loaded and st.session_state.kline_data is not None:
