@@ -47,7 +47,7 @@ SKILLS = [
 # ── AI配置 ────────────────────────────────────────────
 AI_CONFIG = {
     "base_url": "https://api.deepseek.com",
-    "api_key":  st.secrets["AI_API_KEY"],
+    "api_key":  st.secrets["OPENAI_API_KEY"],
     "model":    "deepseek-chat",
 }
 
