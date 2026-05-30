@@ -1,9 +1,7 @@
 """
-Al Brooks 结构训练器 V24
-修复：
-1. 品种按钮key冲突（L0同时出现在化工和能源）→ key加品类前缀
-2. API Key改用st.secrets管理，支持deepseek/其他API
-3. 侧栏三块内容：品种选择 + 训练阶段 + 技能选择
+Al Brooks 结构训练器 V22
+关键改动：5个技能按钮移到侧栏（st.radio 垂直排列），永远可见、不被图表遮挡
+主区域：只放 图表 + 对话区
 """
 import json, time, random
 from datetime import datetime, date
@@ -19,17 +17,6 @@ import akshare as ak
 # ── 页面配置 ──────────────────────────────────────────────
 st.set_page_config(page_title="Al Brooks 结构训练器", layout="wide")
 
-# ── 品种分类定义 ─────────────────────────────────────────
-PRODUCT_CATEGORIES = {
-    "金融": ["IF", "IH", "IC", "IM", "TS", "TF"],
-    "有色": ["CU0", "AL0", "ZN0", "PB0", "NI0", "SN0"],
-    "黑色": ["RB0", "HC0", "I0", "JM0", "J0"],
-    "化工": ["V0", "PP0", "L0", "TA0", "MA0", "RU0", "BU0", "FU0", "EG0"],
-    "农产品": ["M0", "Y0", "P0", "A0", "B0", "C0", "CS0", "JD0", "AP0", "CF0"],
-    "能源": ["SC0", "L0"],
-}
-DEFAULT_EXPANDED = ["金融"]
-
 # ── 5个技能定义 ─────────────────────────────────────────
 SKILLS = [
     {"id": 1, "name": "背景阅读",   "question": "当前市场背景是什么？"},
@@ -39,44 +26,8 @@ SKILLS = [
     {"id": 5, "name": "市场接受",   "question": "市场是否接受了新价格？"},
 ]
 
-# ── AI配置 ──────────────────────────────────────────────
-# 优先用st.secrets，否则fallback到硬编码（仅开发用）
-try:
-    AI_CONFIG = {
-        "base_url": st.secrets.get("ai", {}).get("base_url", "https://www.right.codes/codex/v1"),
-        "api_key": st.secrets.get("ai", {}).get("api_key", "sk-KIhnn3eQ0A8mR1eI0a8fC7bBe3d3FfD1BfD3FfD1BfD3FfD1BfD1BfD1BfD1"),
-        "model": st.secrets.get("ai", {}).get("model", "gpt-5.5"),
-    }
-except Exception:
-    AI_CONFIG = {
-        "base_url": "https://www.right.codes/codex/v1",
-        "api_key": "sk-KIhnn3eQ0A8mR1eI0a8fC7bBe3d3FfD1BfD3FfD1BfD3FfD1BfD1BfD1BfD1",
-        "model": "gpt-5.5",
-    }
-
 # ── 侧栏 ────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("**品种选择**")
-
-    current_symbol = st.session_state.get("current_symbol", "RB0")
-    for cat_name, symbols in PRODUCT_CATEGORIES.items():
-        expanded = cat_name in DEFAULT_EXPANDED
-        with st.expander(cat_name, expanded=expanded):
-            cols = st.columns(min(4, len(symbols)))
-            for i, sym in enumerate(symbols):
-                col = cols[i % len(cols)]
-                btn_style = "primary" if sym == current_symbol else "secondary"
-                # 用品类+品种作为唯一key，避免L0在化工和能源中重复
-                if col.button(sym, key=f"sym_{cat_name}_{sym}", type=btn_style, use_container_width=True):
-                    st.session_state.current_symbol = sym
-                    st.session_state.data_loaded = False
-                    st.session_state.kline_data = None
-                    st.session_state.structural_features = {}
-                    st.rerun()
-
-    st.markdown("---")
-
-    # 训练阶段
     st.markdown("**训练阶段**")
     TRAIN_LEVEL_OPTIONS = {
         "阶段1: 观察阶段": "level1",
@@ -112,7 +63,7 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # ── 技能选择（侧栏，垂直 radio） ──
+    # ── 技能选择（侧栏，垂直 radio，永远可见） ──
     st.markdown("**选择技能目的**")
     skill_labels = [f"{s['name']}" for s in SKILLS]
     selected_skill_name = st.radio(
@@ -123,7 +74,7 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    data_display = st.empty()
+    data_display = st.empty()  # 用于更新数据信息
 
 # ── AI Prompt 模板 ──────────────────────────────────────
 AI_SYSTEM_PROMPT_TEMPLATE = """你是一个Al Brooks价格行为交易教练，当前训练阶段为「{level_name}」：{level_desc}
@@ -207,8 +158,8 @@ def ask_coach(
     from openai import OpenAI
 
     client = OpenAI(
-        base_url=AI_CONFIG["base_url"],
-        api_key=AI_CONFIG["api_key"],
+        base_url="https://www.right.codes/codex/v1",
+        api_key="sk-KIhnn3eQ0A8mR1eI0a8fC7bBe3d3FfD1BfD3FfD1BfD3FfD1BfD1BfD1BfD1",
     )
 
     system_prompt = AI_SYSTEM_PROMPT_TEMPLATE.format(
@@ -242,7 +193,7 @@ def ask_coach(
 
     try:
         resp = client.chat.completions.create(
-            model=AI_CONFIG["model"],
+            model="gpt-5.5",
             messages=messages,
             temperature=0.2,
             max_tokens=700,
@@ -391,16 +342,16 @@ for key, default in [
     ("main_contract", None),
     ("structural_features", {}),
     ("prev_skill_name", None),
-    ("current_symbol", "RB0"),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
 
 # ═══════════════════════════════════════════════════════════
-#  主界面
+#  主界面：只有 图表 + 对话
+#  技能选择在侧栏
 # ═══════════════════════════════════════════════════════════
 
-# ── 技能选择处理 ────────────────────────────────────
+# ── 侧栏技能选择处理 ────────────────────────────────
 if selected_skill_name is not None and selected_skill_name != st.session_state.prev_skill_name:
     skill_obj = next(s for s in SKILLS if s["name"] == selected_skill_name)
 
@@ -410,24 +361,24 @@ if selected_skill_name is not None and selected_skill_name != st.session_state.p
         st.session_state.current_skill = skill_obj
         st.session_state.last_skill_id = skill_obj["id"]
         st.session_state.skill_round = 1
+        # 新技能 → 清空对话历史
         st.session_state.chat_history = []
 
     st.session_state.prev_skill_name = selected_skill_name
 
-# 状态栏
+# 显示当前技能状态
 if st.session_state.current_skill:
     skill = st.session_state.current_skill
     round_label = "第1轮(引导)" if st.session_state.skill_round == 1 else "第2轮(点评)"
     st.caption(
-        f"品种: {st.session_state.current_symbol} | "
-        f"技能: {skill['name']} — {skill['question']} | "
+        f"当前技能: {skill['name']} — {skill['question']} | "
         f"阶段: {level_name} | {round_label}"
     )
 
 # ── 数据加载 ────────────────────────────────────────
 if not st.session_state.data_loaded:
-    with st.spinner(f"加载 {st.session_state.current_symbol} 数据..."):
-        df, main_code = load_data(st.session_state.current_symbol)
+    with st.spinner("加载数据..."):
+        df, main_code = load_data()
         if df is not None:
             st.session_state.kline_data = df
             st.session_state.main_contract = main_code
@@ -443,24 +394,24 @@ else:
 
 # 更新侧栏数据信息
 if st.session_state.data_loaded and st.session_state.kline_data is not None:
-    data_display.caption(
-        f"合约: {st.session_state.main_contract or st.session_state.current_symbol} | "
-        f"数据: {len(st.session_state.kline_data)} 根K线 | Bar: {n_bars}"
-    )
+    data_display.caption(f"数据: {len(st.session_state.kline_data)} 根K线 | Bar: {n_bars}")
 
+# ── 分隔线 ──────────────────────────────────────────
 st.markdown("---")
 
 # ── 对话区 ──────────────────────────────────────────
 if st.session_state.current_skill is None:
-    st.info("👈 从左侧侧栏选择品种、阶段和技能目的开始训练")
+    st.info("👈 从左侧侧栏选择技能目的开始训练")
 else:
     skill = st.session_state.current_skill
     is_round2 = st.session_state.skill_round == 2
 
+    # 显示对话历史
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
+    # 第1轮：自动生成AI引导
     has_guide = any(
         m["role"] == "assistant" and "当前技能目的" in m.get("content", "")
         for m in st.session_state.chat_history[-5:]
@@ -478,6 +429,7 @@ else:
             st.markdown(reply)
         st.session_state.chat_history.append({"role": "assistant", "content": reply})
 
+    # 用户输入
     prompt = "你的观察是？" if not is_round2 else "你的回答是？(第2轮)"
     user_input = st.chat_input(prompt)
     if user_input:
