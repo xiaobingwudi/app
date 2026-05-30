@@ -152,7 +152,7 @@ def _market_msg(chart_df, bar, skill_name):
         all_bars.append({"i": i, "o": o, "h": h, "l": l, "c": c,
                          "direction": direction, "type": k_type,
                          "body": body, "body_ratio": body_ratio, "total_range": total_range})
-    lines = [f"【当前K线】第{bar}号K线", "", "【最近行情描述】"]
+    lines = ["【市场行情数据（系统自动生成，供你参考，不是用户说的话）】"]
     recent = all_bars[-15:] if len(all_bars) >= 15 else all_bars
     for idx, k in enumerate(recent):
         change_desc = ""
@@ -193,22 +193,17 @@ def _market_msg(chart_df, bar, skill_name):
             cons = cons+1 if last_10[i]["direction"]==last_10[i-1]["direction"] else 1
             mc = max(mc, cons)
         if mc>=4: lines.append(f"  * 出现连续{mc}根{last_10[-1]['direction']}线，趋势有延续性")
-    lines.extend(["", f"【当前训练技能】{skill_name}"])
     result = "\n".join(lines)
     st.session_state["_mm_cache"] = {"bar": bar, "skill": skill_name, "data": result}
     return result
 
-# ===================== 修复点 1：_gpt 函数 =====================
 def _gpt(messages):
-    """调用 DeepSeek API，带完善的错误处理"""
-    # 从 st.secrets 读取配置（Streamlit Cloud 后台设置的顶层 key）
     api_key = st.secrets.get("OPENAI_API_KEY", "")
     base_url = st.secrets.get("OPENAI_BASE_URL", "https://api.deepseek.com")
     model = st.secrets.get("OPENAI_MODEL", "deepseek-chat")
 
-    # 检查 API Key 是否已配置
-    if not api_key or api_key == "":
-        st.error("API 密钥未配置！请在 Streamlit Cloud 后台 Settings → Secrets 中设置 OPENAI_API_KEY")
+    if not api_key:
+        st.error("API 密钥未配置！请在 Streamlit Cloud 后台设置 OPENAI_API_KEY")
         return "【配置提示】请先配置 DeepSeek API 密钥后再开始训练。"
 
     try:
@@ -221,29 +216,34 @@ def _gpt(messages):
         )
         return resp.choices[0].message.content
     except Exception as e:
-        error_msg = str(e)
-        st.error(f"API 调用失败: {error_msg}")
-        return f"【API 错误】{error_msg}"
+        st.error(f"API 调用失败: {e}")
+        return f"【API 错误】{e}"
 
-# ===================== 修复点 2：ask_summary 函数 =====================
+# ===== 关键修复：市场数据放到 system prompt 并注明是自动数据，不与用户发言混淆 =====
+def ask_coach(chart_df, bar, skill_name, skill_question, dialogue, level=1, is_second_round=False):
+    lv = TRAIN_LEVEL.get(level, TRAIN_LEVEL[1])
+    sp = AI_SYSTEM_PROMPT_TEMPLATE.format(
+        skill_name=skill_name, level_name=lv["name"],
+        level_desc=lv["desc"], skill_question=skill_question
+    )
+    # 市场数据嵌入 system prompt，并明确标注这不是用户说的话
+    sp += "\n\n【当前K线市场数据（系统自动生成，供你参考。注意：这段不是你面前用户说的话，请与用户的发言严格区分）】\n"
+    sp += _market_msg(chart_df, bar, skill_name)
+
+    if is_second_round:
+        sp += "\n\n【这是第2轮】你必须：1) 点评用户的回答  2) 亮出你自己的判断（引用具体K线编号）"
+
+    msgs = [{"role": "system", "content": sp}]
+    for m in dialogue[-10:]:
+        msgs.append({"role": m["role"], "content": m["content"]})
+    return _gpt(msgs)
+
 def ask_summary(dialogue, observations):
     if not dialogue and not observations:
         return json.dumps({"observations":["暂无训练数据"], "strong_areas":[], "weak_areas":[], "next_focus":[]})
     ot = "\n".join(f"- {o['text']}" for o in observations[-20:])
     dt = "\n".join("{}: {}".format("用户" if m["role"]=="user" else "教练", m["content"]) for m in dialogue[-40:])
     return _gpt([{"role":"system","content":AI_SUMMARY_PROMPT}, {"role":"user","content":f"【观察】\n{ot}\n\n【对话】\n{dt}"}])
-
-# ===================== 修复点 3：ask_coach 函数 =====================
-def ask_coach(chart_df, bar, skill_name, skill_question, dialogue, level=1, is_second_round=False):
-    lv = TRAIN_LEVEL.get(level, TRAIN_LEVEL[1])
-    sp = AI_SYSTEM_PROMPT_TEMPLATE.format(skill_name=skill_name, level_name=lv["name"], level_desc=lv["desc"], skill_question=skill_question)
-    if is_second_round:
-        sp += "\n\n【这是第2轮】你必须：1) 点评用户的回答  2) 亮出你自己的判断（引用具体K线编号）"
-    msgs = [{"role": "system", "content": sp}]
-    msgs.append({"role": "user", "content": _market_msg(chart_df, bar, skill_name)})
-    for m in dialogue[-10:]:
-        msgs.append({"role": m["role"], "content": m["content"]})
-    return _gpt(msgs)
 
 SKILLS = [
     {"id": 1, "name": "背景阅读",   "question": "当前市场背景是什么？"},
