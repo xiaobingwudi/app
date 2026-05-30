@@ -1,11 +1,8 @@
 """
-Al Brooks 结构训练器 V24
-修复：
-1. 品种按钮key冲突（L0同时出现在化工和能源）→ key加品类前缀
-2. API Key改用st.secrets管理，支持deepseek/其他API
-3. 侧栏三块内容：品种选择 + 训练阶段 + 技能选择
+Al Brooks 结构训练器 V26
+修复：适配 akshare 返回的中文/英文列名 + 去除静默try/except
 """
-import json, time, random
+import json, time, random, traceback
 from datetime import datetime, date
 from typing import Optional
 
@@ -39,20 +36,12 @@ SKILLS = [
     {"id": 5, "name": "市场接受",   "question": "市场是否接受了新价格？"},
 ]
 
-# ── AI配置 ──────────────────────────────────────────────
-# 优先用st.secrets，否则fallback到硬编码（仅开发用）
-try:
-    AI_CONFIG = {
-        "base_url": st.secrets.get("ai", {}).get("base_url", "https://www.right.codes/codex/v1"),
-        "api_key": st.secrets.get("ai", {}).get("api_key", "sk-KIhnn3eQ0A8mR1eI0a8fC7bBe3d3FfD1BfD3FfD1BfD3FfD1BfD1BfD1BfD1"),
-        "model": st.secrets.get("ai", {}).get("model", "gpt-5.5"),
-    }
-except Exception:
-    AI_CONFIG = {
-        "base_url": "https://www.right.codes/codex/v1",
-        "api_key": "sk-KIhnn3eQ0A8mR1eI0a8fC7bBe3d3FfD1BfD3FfD1BfD3FfD1BfD1BfD1BfD1",
-        "model": "gpt-5.5",
-    }
+# ── AI配置（从Streamlit Cloud Secrets读取） ────────────
+AI_CONFIG = {
+    "base_url": st.secrets["ai"]["base_url"],
+    "api_key": st.secrets["ai"]["api_key"],
+    "model": st.secrets["ai"]["model"],
+}
 
 # ── 侧栏 ────────────────────────────────────────────────
 with st.sidebar:
@@ -66,12 +55,12 @@ with st.sidebar:
             for i, sym in enumerate(symbols):
                 col = cols[i % len(cols)]
                 btn_style = "primary" if sym == current_symbol else "secondary"
-                # 用品类+品种作为唯一key，避免L0在化工和能源中重复
                 if col.button(sym, key=f"sym_{cat_name}_{sym}", type=btn_style, use_container_width=True):
                     st.session_state.current_symbol = sym
                     st.session_state.data_loaded = False
                     st.session_state.kline_data = None
                     st.session_state.structural_features = {}
+                    st.session_state.data_error = None
                     st.rerun()
 
     st.markdown("---")
@@ -147,6 +136,21 @@ AI_SYSTEM_PROMPT_TEMPLATE = """你是一个Al Brooks价格行为交易教练，�
 - 简洁、专业、直击要点
 - 使用具体的价格行为术语
 - 基于实际K线结构分析，不泛泛而谈"""
+
+
+def _normalize_columns(df):
+    """统一列名为英文，兼容akshare不同版本的中文/英文列名"""
+    col_map = {
+        "日期": "date", "时间": "date", "datetime": "date",
+        "开盘价": "Open", "开盘": "Open", "open": "Open",
+        "最高价": "High", "最高": "High", "high": "High",
+        "最低价": "Low", "最低": "Low", "low": "Low",
+        "收盘价": "Close", "收盘": "Close", "close": "Close",
+        "成交量": "Volume", "成交": "Volume", "volume": "Volume",
+        "持仓量": "OpenInterest", "持仓": "OpenInterest", "open_interest": "OpenInterest",
+    }
+    df = df.rename(columns={c: col_map.get(c, c) for c in df.columns})
+    return df
 
 
 def _market_msg(kline_df: pd.DataFrame) -> str:
@@ -252,29 +256,45 @@ def ask_coach(
         return f"[AI调用失败] {str(e)}"
 
 
-# ── 数据获取（缓存） ──────────────────────────────────
-@st.cache_data(ttl=60, show_spinner=False)
-def _fetch_all_contracts(symbol: str):
-    """获取全合约数据并找出主力"""
+# ── 数据获取 ──────────────────────────────────────────
+def load_data(symbol: str = "RB0"):
+    """加载期货数据，适配中文/英文列名"""
+    # 1. 获取分钟数据
     try:
         df = ak.futures_zh_minute_sina(symbol=symbol, period="60")
-        if df is None or df.empty:
-            return None, None
-        df["date"] = pd.to_datetime(df["date"])
+    except Exception as e:
+        st.error(f"❌ futures_zh_minute_sina 调用失败: {e}")
+        return None, None
+
+    if df is None or df.empty:
+        st.error(f"❌ {symbol} 返回数据为空")
+        return None, None
+
+    # 2. 统一列名（中文→英文）
+    df = _normalize_columns(df)
+
+    # 3. 检查关键列是否存在
+    required_cols = ["date", "Open", "High", "Low", "Close", "Volume"]
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        st.error(f"❌ 缺少列: {missing}，当前列名: {list(df.columns)}")
+        return None, None
+
+    df["date"] = pd.to_datetime(df["date"])
+
+    # 4. 获取主力合约
+    try:
         main_code = ak.match_main_contract(symbol=symbol)
-        return df, main_code
-    except Exception:
-        return None, None
+    except Exception as e:
+        st.warning(f"主力合约查询失败: {e}，使用全部数据")
+        main_code = None
 
-
-def load_data(symbol: str = "RB0"):
-    df, main_code = _fetch_all_contracts(symbol)
-    if df is None:
-        return None, None
+    # 5. 筛选主力合约数据
     if main_code and main_code in df["symbol"].values:
         df_main = df[df["symbol"] == main_code].copy()
     else:
         df_main = df.copy()
+
     df_main.sort_values("date", inplace=True)
     df_main.reset_index(drop=True, inplace=True)
     return df_main, main_code
@@ -392,6 +412,7 @@ for key, default in [
     ("structural_features", {}),
     ("prev_skill_name", None),
     ("current_symbol", "RB0"),
+    ("data_error", None),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -428,18 +449,22 @@ if st.session_state.current_skill:
 if not st.session_state.data_loaded:
     with st.spinner(f"加载 {st.session_state.current_symbol} 数据..."):
         df, main_code = load_data(st.session_state.current_symbol)
-        if df is not None:
+
+        if df is not None and len(df) > 0:
             st.session_state.kline_data = df
             st.session_state.main_contract = main_code
             st.session_state.structural_features = calc_structural_features(df)
             st.session_state.data_loaded = True
+            st.session_state.data_error = None
+        else:
+            st.session_state.data_error = "数据加载失败，请检查控制台日志"
 
 # ── 图表区 ──────────────────────────────────────────
 if st.session_state.data_loaded and st.session_state.kline_data is not None:
     fig = plot_kline(st.session_state.kline_data, st.session_state.structural_features)
     st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True})
-else:
-    st.info("数据加载失败，请检查网络或合约代码")
+elif st.session_state.data_error:
+    st.error(st.session_state.data_error)
 
 # 更新侧栏数据信息
 if st.session_state.data_loaded and st.session_state.kline_data is not None:
