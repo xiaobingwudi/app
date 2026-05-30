@@ -198,14 +198,42 @@ def _market_msg(chart_df, bar, skill_name):
     st.session_state["_mm_cache"] = {"bar": bar, "skill": skill_name, "data": result}
     return result
 
+# ===================== 修复点 1：_gpt 函数 =====================
 def _gpt(messages):
-    try:
-        client = OpenAI(base_url="https://api.deepseek.com/beta", api_key=st.secrets.get("OPENAI_API_KEY", ""))
-    except Exception:
-        client = OpenAI(base_url="https://api.deepseek.com/beta", api_key="")
-    resp = client.chat.completions.create(model="gpt-5.5", messages=messages, temperature=0.2, max_tokens=700)
-    return resp.choices[0].message.content
+    """调用 DeepSeek API，带完善的错误处理"""
+    # 从 st.secrets 读取配置（Streamlit Cloud 后台设置的顶层 key）
+    api_key = st.secrets.get("OPENAI_API_KEY", "")
+    base_url = st.secrets.get("OPENAI_BASE_URL", "https://api.deepseek.com")
+    model = st.secrets.get("OPENAI_MODEL", "deepseek-chat")
 
+    # 检查 API Key 是否已配置
+    if not api_key or api_key == "":
+        st.error("API 密钥未配置！请在 Streamlit Cloud 后台 Settings → Secrets 中设置 OPENAI_API_KEY")
+        return "【配置提示】请先配置 DeepSeek API 密钥后再开始训练。"
+
+    try:
+        client = OpenAI(base_url=base_url, api_key=api_key)
+        resp = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=0.2,
+            max_tokens=700
+        )
+        return resp.choices[0].message.content
+    except Exception as e:
+        error_msg = str(e)
+        st.error(f"API 调用失败: {error_msg}")
+        return f"【API 错误】{error_msg}"
+
+# ===================== 修复点 2：ask_summary 函数 =====================
+def ask_summary(dialogue, observations):
+    if not dialogue and not observations:
+        return json.dumps({"observations":["暂无训练数据"], "strong_areas":[], "weak_areas":[], "next_focus":[]})
+    ot = "\n".join(f"- {o['text']}" for o in observations[-20:])
+    dt = "\n".join("{}: {}".format("用户" if m["role"]=="user" else "教练", m["content"]) for m in dialogue[-40:])
+    return _gpt([{"role":"system","content":AI_SUMMARY_PROMPT}, {"role":"user","content":f"【观察】\n{ot}\n\n【对话】\n{dt}"}])
+
+# ===================== 修复点 3：ask_coach 函数 =====================
 def ask_coach(chart_df, bar, skill_name, skill_question, dialogue, level=1, is_second_round=False):
     lv = TRAIN_LEVEL.get(level, TRAIN_LEVEL[1])
     sp = AI_SYSTEM_PROMPT_TEMPLATE.format(skill_name=skill_name, level_name=lv["name"], level_desc=lv["desc"], skill_question=skill_question)
@@ -216,13 +244,6 @@ def ask_coach(chart_df, bar, skill_name, skill_question, dialogue, level=1, is_s
     for m in dialogue[-10:]:
         msgs.append({"role": m["role"], "content": m["content"]})
     return _gpt(msgs)
-
-def ask_summary(dialogue, observations):
-    if not dialogue and not observations:
-        return json.dumps({"observations":["暂无训练数据"], "strong_areas":[], "weak_areas":[], "next_focus":[]})
-    ot = "\n".join(f"- {o['text']}" for o in observations[-20:])
-    dt = "\n".join("{}: {}".format("用户" if m["role"]=="user" else "教练", m["content"]) for m in dialogue[-40:])
-    return _gpt([{"role":"system","content":AI_SUMMARY_PROMPT}, {"role":"user","content":f"【观察】\n{ot}\n\n【对话】\n{dt}"}])
 
 SKILLS = [
     {"id": 1, "name": "背景阅读",   "question": "当前市场背景是什么？"},
@@ -269,8 +290,6 @@ def _do_load(sym_code, sym_main):
 
 def main():
     st.set_page_config(page_title="Al Brooks 结构训练器", layout="wide")
-
-    # 移除所有自定义CSS，使用Streamlit原生布局
 
     for k, v in {
         "chart_df":None, "current_bar":40, "coach_dialogue":[], "send_counter":0,
@@ -319,7 +338,6 @@ def main():
         st.info("请从左侧选择品种开始训练"); return
     bar=st.session_state["current_bar"]
 
-    # 用container隔离技能按钮区域，防止被图表覆盖
     with st.container():
         current_skill_id=st.session_state.get("train_mode",1)
         cols=st.columns(5)
@@ -333,11 +351,9 @@ def main():
         active_skill=next(sk for sk in SKILLS if sk["id"]==current_skill_id)
         st.caption(f"当前技能: {active_skill['name']} | 阶段: {TRAIN_LEVEL[st.session_state['train_level']]['name']} | 第{st.session_state['skill_round']+1}/2 轮")
 
-    # 用container隔离图表
     with st.container():
         st.plotly_chart(build_chart(df, bar), use_container_width=True)
 
-    # 用container隔离对话区域
     with st.container():
         st.markdown("### 教练")
         for m in st.session_state["coach_dialogue"][-10:]:
