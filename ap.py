@@ -1,18 +1,10 @@
 """
-Al Brooks 结构训练器 V27
-改动：
-1. level变量显式传参，消除作用域依赖
-2. 第2轮触发逻辑修复（去掉外层!=判断）
-3. load_data 加 @st.cache_data 缓存
-4. 合约加载改为并发请求（ThreadPoolExecutor）
-5. K线编号改为从左到右正序
-6. has_guide 改为 session_state 布尔值追踪
-7. L0 从能源分类移除
+Al Brooks 结构训练器 V28
+修复：兼容各种st.secrets格式 + 显示可用key名帮助诊断
 """
 import json, time, random, traceback
 from datetime import datetime, date
 from typing import Optional
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import streamlit as st
 import pandas as pd
@@ -26,12 +18,12 @@ st.set_page_config(page_title="Al Brooks 结构训练器", layout="wide")
 
 # ── 品种分类定义 ─────────────────────────────────────────
 PRODUCT_CATEGORIES = {
-    "金融":  ["IF", "IH", "IC", "IM", "TS", "TF"],
-    "有色":  ["CU0", "AL0", "ZN0", "PB0", "NI0", "SN0"],
-    "黑色":  ["RB0", "HC0", "I0", "JM0", "J0"],
-    "化工":  ["V0", "PP0", "L0", "TA0", "MA0", "RU0", "BU0", "FU0", "EG0"],
-    "农产品":["M0", "Y0", "P0", "A0", "B0", "C0", "CS0", "JD0", "AP0", "CF0"],
-    "能源":  ["SC0"],          # 改动7：L0是塑料/化工，不是能源，已移除
+    "金融": ["IF", "IH", "IC", "IM", "TS", "TF"],
+    "有色": ["CU0", "AL0", "ZN0", "PB0", "NI0", "SN0"],
+    "黑色": ["RB0", "HC0", "I0", "JM0", "J0"],
+    "化工": ["V0", "PP0", "L0", "TA0", "MA0", "RU0", "BU0", "FU0", "EG0"],
+    "农产品": ["M0", "Y0", "P0", "A0", "B0", "C0", "CS0", "JD0", "AP0", "CF0"],
+    "能源": ["SC0", "L0"],
 }
 DEFAULT_EXPANDED = ["金融"]
 
@@ -44,50 +36,68 @@ SKILLS = [
     {"id": 5, "name": "市场接受",   "question": "市场是否接受了新价格？"},
 ]
 
-# ── AI配置 ────────────────────────────────────────────
-AI_CONFIG = {
-    "base_url": "https://api.deepseek.com",
-    "api_key":  st.secrets["OPENAI_API_KEY"],
-    "model":    "deepseek-chat",
-}
+# ── AI配置（兼容各种secrets格式） ────────────────────
+def _get_ai_config():
+    """从secrets读取AI配置，兼容多种格式"""
+    config = {"base_url": "https://api.deepseek.com/v1", "api_key": "", "model": "deepseek-chat"}
 
-# ── 训练阶段配置 ─────────────────────────────────────────
-LEVEL_CONFIG = {
-    "level1": {
-        "name": "观察阶段",
-        "desc": "识别市场结构特征（趋势/震荡/通道/双重顶底）",
-        "n_bars": 40,
-    },
-    "level2": {
-        "name": "行为细化阶段",
-        "desc": "分析K线行为细节（影线/实体/嵌套/突破）",
-        "n_bars": 30,
-    },
-    "level3": {
-        "name": "结构验证阶段",
-        "desc": "验证结构预期与多时间框架一致性",
-        "n_bars": 60,
-    },
-}
+    # 尝试所有可能的secrets结构
+    try_paths = [
+        # 嵌套 [ai] 结构
+        lambda: {"base_url": st.secrets["ai"]["base_url"], "api_key": st.secrets["ai"]["api_key"], "model": st.secrets["ai"]["model"]},
+        # 嵌套 [openai] 结构
+        lambda: {"base_url": st.secrets["openai"]["base_url"], "api_key": st.secrets["openai"]["api_key"], "model": st.secrets["openai"]["model"]},
+        # 扁平结构
+        lambda: {"base_url": st.secrets["base_url"], "api_key": st.secrets["api_key"], "model": st.secrets["model"]},
+        # 仅api_key扁平
+        lambda: {"base_url": config["base_url"], "api_key": st.secrets["api_key"], "model": config["model"]},
+        # OPENAI_API_KEY风格
+        lambda: {"base_url": st.secrets.get("OPENAI_BASE_URL", config["base_url"]), "api_key": st.secrets["OPENAI_API_KEY"], "model": st.secrets.get("OPENAI_MODEL", config["model"])},
+    ]
 
-# ── Session State 初始化 ──────────────────────────────────
-for key, default in [
-    ("current_skill",      None),
-    ("skill_round",        1),
-    ("chat_history",       []),
-    ("last_skill_id",      None),
-    ("data_loaded",        False),
-    ("kline_data",         None),
-    ("main_contract",      None),
-    ("structural_features",{}),
-    ("prev_skill_name",    None),
-    ("current_symbol",     "RB0"),
-    ("data_error",         None),
-    ("guide_sent",         False),   # 改动6：布尔值追踪第1轮是否已发送
-    ("train_level",        "level1"),
-]:
-    if key not in st.session_state:
-        st.session_state[key] = default
+    for try_fn in try_paths:
+        try:
+            result = try_fn()
+            if result.get("api_key"):
+                return result
+        except (KeyError, TypeError):
+            continue
+
+    # 全部失败 → 显示secrets中的所有key名（不暴露值）
+    available_keys = []
+    try:
+        for k in st.secrets.keys():
+            v = st.secrets[k]
+            if isinstance(v, dict):
+                for sk in v.keys():
+                    available_keys.append(f"st.secrets[\"{k}\"][\"{sk}\"]")
+            else:
+                available_keys.append(f"st.secrets[\"{k}\"]")
+    except Exception:
+        pass
+
+    msg = "❌ 未找到API Key配置\n\n"
+    msg += "请在 Streamlit Cloud 的 Secrets 中添加以下任一格式：\n\n"
+    msg += "```toml\n"
+    msg += "# 格式1（推荐）：\n"
+    msg += '[ai]\n'
+    msg += 'base_url = "https://api.deepseek.com/v1"\n'
+    msg += 'api_key = "sk-你的key"\n'
+    msg += 'model = "deepseek-chat"\n'
+    msg += "\n"
+    msg += "# 格式2（扁平）：\n"
+    msg += 'api_key = "sk-你的key"\n'
+    msg += 'base_url = "https://api.deepseek.com/v1"\n'
+    msg += 'model = "deepseek-chat"\n'
+    msg += "```\n"
+
+    if available_keys:
+        msg += f"\n当前secrets中的key名：\n" + "\n".join(f"- `{k}`" for k in available_keys)
+
+    st.error(msg)
+    st.stop()
+
+AI_CONFIG = _get_ai_config()
 
 # ── 侧栏 ────────────────────────────────────────────────
 with st.sidebar:
@@ -101,45 +111,66 @@ with st.sidebar:
             for i, sym in enumerate(symbols):
                 col = cols[i % len(cols)]
                 btn_style = "primary" if sym == current_symbol else "secondary"
-                if col.button(sym, key=f"sym_{cat_name}_{sym}",
-                              type=btn_style, use_container_width=True):
+                if col.button(sym, key=f"sym_{cat_name}_{sym}", type=btn_style, use_container_width=True):
                     st.session_state.current_symbol = sym
-                    st.session_state.data_loaded    = False
-                    st.session_state.kline_data     = None
+                    st.session_state.data_loaded = False
+                    st.session_state.kline_data = None
                     st.session_state.structural_features = {}
-                    st.session_state.data_error     = None
+                    st.session_state.data_error = None
                     st.rerun()
 
     st.markdown("---")
 
+    # 训练阶段
     st.markdown("**训练阶段**")
     TRAIN_LEVEL_OPTIONS = {
-        "阶段1: 观察阶段":      "level1",
-        "阶段2: 行为细化阶段":  "level2",
-        "阶段3: 结构验证阶段":  "level3",
+        "阶段1: 观察阶段": "level1",
+        "阶段2: 行为细化阶段": "level2",
+        "阶段3: 结构验证阶段": "level3",
     }
     selected_level_label = st.selectbox(
         "", list(TRAIN_LEVEL_OPTIONS.keys()), label_visibility="collapsed"
     )
-    # 改动1：level信息存入 session_state，供函数显式取用
-    st.session_state.train_level = TRAIN_LEVEL_OPTIONS[selected_level_label]
-    level_info  = LEVEL_CONFIG[st.session_state.train_level]
-    n_bars      = level_info["n_bars"]
-    level_name  = level_info["name"]
-    level_desc  = level_info["desc"]
+    train_level = TRAIN_LEVEL_OPTIONS[selected_level_label]
+
+    LEVEL_CONFIG = {
+        "level1": {
+            "name": "观察阶段",
+            "desc": "识别市场结构特征（趋势/震荡/通道/双重顶底）",
+            "n_bars": 40,
+        },
+        "level2": {
+            "name": "行为细化阶段",
+            "desc": "分析K线行为细节（影线/实体/嵌套/突破）",
+            "n_bars": 30,
+        },
+        "level3": {
+            "name": "结构验证阶段",
+            "desc": "验证结构预期与多时间框架一致性",
+            "n_bars": 60,
+        },
+    }
+    level_info = LEVEL_CONFIG[train_level]
+    n_bars = level_info["n_bars"]
+    level_name = level_info["name"]
+    level_desc = level_info["desc"]
 
     st.markdown("---")
 
+    # ── 技能选择（侧栏，垂直 radio） ──
     st.markdown("**选择技能目的**")
-    skill_labels = [s["name"] for s in SKILLS]
+    skill_labels = [f"{s['name']}" for s in SKILLS]
     selected_skill_name = st.radio(
-        "", skill_labels, index=None, label_visibility="collapsed"
+        "",
+        skill_labels,
+        index=None,
+        label_visibility="collapsed",
     )
 
     st.markdown("---")
     data_display = st.empty()
 
-# ── AI Prompt 模板 ───────────────────────────────────────
+# ── AI Prompt 模板 ──────────────────────────────────────
 AI_SYSTEM_PROMPT_TEMPLATE = """你是一个Al Brooks价格行为交易教练，当前训练阶段为「{level_name}」：{level_desc}
 
 ## 核心职责
@@ -163,23 +194,23 @@ AI_SYSTEM_PROMPT_TEMPLATE = """你是一个Al Brooks价格行为交易教练，�
 - 基于实际K线结构分析，不泛泛而谈"""
 
 
-# ── 列名标准化 ───────────────────────────────────────────
 def _normalize_columns(df):
+    """统一列名为英文，兼容akshare不同版本的中文/英文列名"""
     col_map = {
         "日期": "date", "时间": "date", "datetime": "date",
         "开盘价": "Open", "开盘": "Open", "open": "Open",
         "最高价": "High", "最高": "High", "high": "High",
-        "最低价": "Low",  "最低": "Low",  "low": "Low",
-        "收盘价": "Close","收盘": "Close","close": "Close",
-        "成交量": "Volume","成交": "Volume","volume": "Volume",
-        "持仓量": "OpenInterest","持仓": "OpenInterest",
-        "open_interest": "OpenInterest",
+        "最低价": "Low", "最低": "Low", "low": "Low",
+        "收盘价": "Close", "收盘": "Close", "close": "Close",
+        "成交量": "Volume", "成交": "Volume", "volume": "Volume",
+        "持仓量": "OpenInterest", "持仓": "OpenInterest", "open_interest": "OpenInterest",
     }
-    return df.rename(columns={c: col_map.get(c, c) for c in df.columns})
+    df = df.rename(columns={c: col_map.get(c, c) for c in df.columns})
+    return df
 
 
-# ── 市场消息构建（保持原版只传10根，改动2不动）────────────
 def _market_msg(kline_df: pd.DataFrame) -> str:
+    """将K线数据转化为自然语言的市场描述"""
     if kline_df is None or kline_df.empty:
         return "暂无数据"
 
@@ -187,10 +218,11 @@ def _market_msg(kline_df: pd.DataFrame) -> str:
     o, h, l, c = recent["Open"], recent["High"], recent["Low"], recent["Close"]
 
     direction = "上涨" if c.iloc[-1] > o.iloc[-1] else "下跌" if c.iloc[-1] < o.iloc[-1] else "平收"
-    body      = abs(c.iloc[-1] - o.iloc[-1])
-    upper     = h.iloc[-1] - max(c.iloc[-1], o.iloc[-1])
-    lower     = min(c.iloc[-1], o.iloc[-1]) - l.iloc[-1]
+    body = abs(c.iloc[-1] - o.iloc[-1])
+    upper = h.iloc[-1] - max(c.iloc[-1], o.iloc[-1])
+    lower = min(c.iloc[-1], o.iloc[-1]) - l.iloc[-1]
     range_val = h.iloc[-1] - l.iloc[-1]
+
     total_range = (h.max() - l.min()) / (l.min() or 1) * 100
     atr = (h - l).rolling(5).mean().iloc[-1]
 
@@ -207,12 +239,15 @@ def _market_msg(kline_df: pd.DataFrame) -> str:
     else:
         lines.append("短期趋势: 震荡")
 
-    cons_up = cons_dn = 0
+    cons_up = 0
+    cons_dn = 0
     for i in range(len(c) - 1, 0, -1):
         if c.iloc[i] > c.iloc[i - 1]:
-            cons_up += 1; cons_dn = 0
+            cons_up += 1
+            cons_dn = 0
         else:
-            cons_dn += 1; cons_up = 0
+            cons_dn += 1
+            cons_up = 0
     if cons_up >= 3:
         lines.append(f"连续{cons_up}根上涨，多头推进中")
     elif cons_dn >= 3:
@@ -221,18 +256,20 @@ def _market_msg(kline_df: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
-# ── AI 教练调用（改动1：level参数显式传入）──────────────
 def ask_coach(
     skill_name: str,
     skill_question: str,
     market_msg: str,
-    level_name: str,       # 改动1：显式参数
-    level_desc: str,       # 改动1：显式参数
     user_input: str = "",
     is_second_round: bool = False,
 ) -> str:
+    """调用AI教练"""
     from openai import OpenAI
-    client = OpenAI(base_url=AI_CONFIG["base_url"], api_key=AI_CONFIG["api_key"])
+
+    client = OpenAI(
+        base_url=AI_CONFIG["base_url"],
+        api_key=AI_CONFIG["api_key"],
+    )
 
     system_prompt = AI_SYSTEM_PROMPT_TEMPLATE.format(
         skill_name=skill_name,
@@ -241,36 +278,26 @@ def ask_coach(
         level_desc=level_desc,
     )
 
-    recent_msgs = [
-        {"role": m["role"], "content": m["content"]}
-        for m in st.session_state.chat_history[-10:]
-    ]
+    recent_msgs = []
+    if "chat_history" in st.session_state:
+        for m in st.session_state.chat_history[-10:]:
+            recent_msgs.append({"role": m["role"], "content": m["content"]})
 
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "user",   "content": f"当前市场状况：\n{market_msg}"},
+        {"role": "user", "content": f"当前市场状况：\n{market_msg}"},
     ]
     messages.extend(recent_msgs)
 
     if is_second_round:
         messages.append({
             "role": "user",
-            "content": (
-                f"【第2轮】用户对上一轮引导的回应：{user_input}\n\n"
-                "请按以下结构给出点评：\n"
-                "1. 肯定正确的部分\n"
-                "2. 指出遗漏或偏差\n"
-                "3. 给出清晰的判断结论（趋势方向/控制权归属/结构类型）"
-            ),
+            "content": f"【第2轮】用户对上一轮引导的回应：{user_input}\n\n请按以下结构给出点评：\n1. 肯定正确的部分\n2. 指出遗漏或偏差\n3. 给出清晰的判断结论（趋势方向/控制权归属/结构类型）",
         })
     else:
         messages.append({
             "role": "user",
-            "content": (
-                f"【第1轮】当前技能目的：「{skill_name}」，"
-                f"核心提问：「{skill_question}」。\n"
-                "请描述当前市场结构，并提出引导性问题促使我思考。"
-            ),
+            "content": f"【第1轮】当前技能目的：「{skill_name}」，核心提问：「{skill_question}」。\n请描述当前市场结构，并提出引导性问题促使我思考。",
         })
 
     try:
@@ -285,55 +312,17 @@ def ask_coach(
         return f"[AI调用失败] {str(e)}"
 
 
-# ── 数据获取（改动3：加缓存；改动4：并发加载）────────────
-@st.cache_data(ttl=3600, show_spinner=False)
-def _fetch_raw(symbol: str):
-    """获取原始K线数据，缓存1小时，失败自动重试3次"""
-    last_err = ""
-    for attempt in range(3):
-        try:
-            df = ak.futures_zh_minute_sina(symbol=symbol, period="60")
-            if df is not None and not df.empty:
-                return df, None
-            last_err = f"{symbol} 返回数据为空"
-        except Exception as e:
-            last_err = str(e)
-            if attempt < 2:
-                time.sleep(2 ** (attempt + 1))
-                continue
-    return None, last_err
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def _fetch_all_contracts_cached():
-    """改动4：并发请求5个交易所主力合约，缓存1小时"""
-    def _fetch_one(ex):
-        try:
-            return str(ak.match_main_contract(symbol=ex)).split(",")
-        except Exception:
-            return []
-
-    result = {}
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = {
-            executor.submit(_fetch_one, ex): ex
-            for ex in ["shfe", "dce", "czce", "cffex", "gfex"]
-        }
-        for future in as_completed(futures):
-            for c in future.result():
-                c = c.strip()
-                if len(c) >= 3:
-                    result[c] = c
-    return result
-
-
+# ── 数据获取 ──────────────────────────────────────────
 def load_data(symbol: str = "RB0"):
-    """加载期货数据"""
-    df, err = _fetch_raw(symbol)
-    if err:
-        st.error(f"❌ 数据获取失败: {err}")
+    """加载期货数据，适配中文/英文列名"""
+    try:
+        df = ak.futures_zh_minute_sina(symbol=symbol, period="60")
+    except Exception as e:
+        st.error(f"❌ futures_zh_minute_sina 调用失败: {e}")
         return None, None
-    if df is None:
+
+    if df is None or df.empty:
+        st.error(f"❌ {symbol} 返回数据为空")
         return None, None
 
     df = _normalize_columns(df)
@@ -352,7 +341,7 @@ def load_data(symbol: str = "RB0"):
         st.warning(f"主力合约查询失败: {e}，使用全部数据")
         main_code = None
 
-    if main_code and "symbol" in df.columns and main_code in df["symbol"].values:
+    if main_code and main_code in df["symbol"].values:
         df_main = df[df["symbol"] == main_code].copy()
     else:
         df_main = df.copy()
@@ -362,8 +351,9 @@ def load_data(symbol: str = "RB0"):
     return df_main, main_code
 
 
-# ── 结构特征预计算 ───────────────────────────────────────
+# ── 结构特征预计算 ──────────────────────────────────────
 def calc_structural_features(kline_df: pd.DataFrame) -> dict:
+    """预计算K线结构特征"""
     if kline_df is None or len(kline_df) < 10:
         return {}
     o = kline_df["Open"].values
@@ -371,38 +361,40 @@ def calc_structural_features(kline_df: pd.DataFrame) -> dict:
     l = kline_df["Low"].values
     c = kline_df["Close"].values
     n = len(kline_df)
+    features = {}
 
-    ma20  = pd.Series(c).rolling(20).mean().values
+    ma20 = pd.Series(c).rolling(20).mean().values
     slope = (ma20[-1] - ma20[-5]) / 5 if not np.isnan(ma20[-1]) and not np.isnan(ma20[-5]) else 0
+    features["trend"] = "up" if slope > 0 else "down" if slope < 0 else "flat"
+
+    features["volatility"] = float(np.std((h - l) / (l + 1e-10)))
 
     lookback = min(20, n)
     up_count = sum(1 for i in range(n - lookback, n) if c[i] > c[i - 1])
+    features["up_ratio"] = up_count / lookback
 
-    recent_high = max(h[n - 21: n - 1]) if n >= 21 else max(h[: n - 1])
-    recent_low  = min(l[n - 21: n - 1]) if n >= 21 else min(l[: n - 1])
+    recent_high = max(h[n - 21 : n - 1]) if n >= 21 else max(h[: n - 1])
+    recent_low = min(l[n - 21 : n - 1]) if n >= 21 else min(l[: n - 1])
+    features["breakout_up"] = bool(c[-1] > recent_high and h[-1] > recent_high)
+    features["breakout_dn"] = bool(c[-1] < recent_low and l[-1] < recent_low)
 
-    seg_high = max(h[-10:]) if n >= 10 else h[-1]
-    seg_low  = min(l[-10:]) if n >= 10 else l[-1]
-    seg_range = seg_high - seg_low
-    retrace   = abs(c[-1] - seg_low) / seg_range if seg_range > 0 else 0.5
+    if n >= 10:
+        seg_high = max(h[-10:])
+        seg_low = min(l[-10:])
+        seg_range = seg_high - seg_low
+        retrace = abs(c[-1] - seg_low) / seg_range if seg_range > 0 else 0.5
+        features["retrace_depth"] = float(retrace)
 
-    return {
-        "trend":        "up" if slope > 0 else "down" if slope < 0 else "flat",
-        "volatility":   float(np.std((h - l) / (l + 1e-10))),
-        "up_ratio":     up_count / lookback,
-        "breakout_up":  bool(c[-1] > recent_high and h[-1] > recent_high),
-        "breakout_dn":  bool(c[-1] < recent_low  and l[-1] < recent_low),
-        "retrace_depth":float(retrace),
-    }
+    return features
 
 
-# ── 图表绘制（改动5：K线编号正序）──────────────────────
-def plot_kline(kline_df: pd.DataFrame, features: dict, n_bars: int):
+# ── 图表绘制 ────────────────────────────────────────────
+def plot_kline(kline_df: pd.DataFrame, features: dict):
+    """绘制K线图+结构标注"""
     if kline_df is None or kline_df.empty:
         return go.Figure()
 
     df = kline_df.tail(n_bars).copy()
-    df = df.reset_index(drop=True)   # 重置索引，i从0开始对应最旧一根
     if len(df) < 5:
         return go.Figure()
 
@@ -424,18 +416,14 @@ def plot_kline(kline_df: pd.DataFrame, features: dict, n_bars: int):
         row=1, col=1,
     )
 
-    colors = [
-        "#ef5350" if row["Close"] >= row["Open"] else "#26a69a"
-        for _, row in df.iterrows()
-    ]
+    colors = ["#ef5350" if row["Close"] >= row["Open"] else "#26a69a" for _, row in df.iterrows()]
     fig.add_trace(
         go.Bar(x=df["date"], y=df["Volume"], name="成交量", marker_color=colors),
         row=2, col=1,
     )
 
-    # 改动5：正序编号，最旧=1，最新=n_bars
     for i, (_, row) in enumerate(df.iterrows()):
-        label = str(i + 1)
+        label = str(len(df) - i)
         fig.add_annotation(
             x=row["date"], y=row["High"],
             text=label, showarrow=False,
@@ -445,13 +433,12 @@ def plot_kline(kline_df: pd.DataFrame, features: dict, n_bars: int):
 
     if features:
         last_c = df["Close"].iloc[-1]
-        last_d = df["date"].iloc[-1]
         if features.get("breakout_up"):
-            fig.add_hline(y=last_c, line_color="red",   line_dash="dot", opacity=0.5, row=1, col=1)
-            fig.add_annotation(x=last_d, y=last_c, text="突破↑", showarrow=False, yshift=10,  row=1, col=1)
+            fig.add_hline(y=last_c, line_color="red", line_dash="dot", opacity=0.5, row=1, col=1)
+            fig.add_annotation(x=df["date"].iloc[-1], y=last_c, text="突破↑", showarrow=False, yshift=10, row=1, col=1)
         if features.get("breakout_dn"):
             fig.add_hline(y=last_c, line_color="green", line_dash="dot", opacity=0.5, row=1, col=1)
-            fig.add_annotation(x=last_d, y=last_c, text="突破↓", showarrow=False, yshift=-10, row=1, col=1)
+            fig.add_annotation(x=df["date"].iloc[-1], y=last_c, text="突破↓", showarrow=False, yshift=-10, row=1, col=1)
 
     fig.update_layout(
         height=480,
@@ -464,25 +451,40 @@ def plot_kline(kline_df: pd.DataFrame, features: dict, n_bars: int):
     return fig
 
 
+# ── Session State 初始化 ──────────────────────────────
+for key, default in [
+    ("current_skill", None),
+    ("skill_round", 1),
+    ("chat_history", []),
+    ("last_skill_id", None),
+    ("data_loaded", False),
+    ("kline_data", None),
+    ("main_contract", None),
+    ("structural_features", {}),
+    ("prev_skill_name", None),
+    ("current_symbol", "RB0"),
+    ("data_error", None),
+]:
+    if key not in st.session_state:
+        st.session_state[key] = default
+
 # ═══════════════════════════════════════════════════════════
 #  主界面
 # ═══════════════════════════════════════════════════════════
 
-# ── 技能切换处理（改动2：修复第2轮触发逻辑）────────────
-if selected_skill_name is not None:
-    if selected_skill_name == st.session_state.prev_skill_name:
-        # 同一技能再次点击 → 进入第2轮
-        if st.session_state.skill_round == 1:
-            st.session_state.skill_round = 2
+# ── 技能选择处理 ────────────────────────────────────
+if selected_skill_name is not None and selected_skill_name != st.session_state.prev_skill_name:
+    skill_obj = next(s for s in SKILLS if s["name"] == selected_skill_name)
+
+    if st.session_state.prev_skill_name == selected_skill_name:
+        st.session_state.skill_round = 2
     else:
-        # 切换到新技能 → 重置为第1轮
-        skill_obj = next(s for s in SKILLS if s["name"] == selected_skill_name)
-        st.session_state.current_skill   = skill_obj
-        st.session_state.last_skill_id   = skill_obj["id"]
-        st.session_state.skill_round     = 1
-        st.session_state.chat_history    = []
-        st.session_state.guide_sent      = False   # 改动6：重置引导标志
-        st.session_state.prev_skill_name = selected_skill_name
+        st.session_state.current_skill = skill_obj
+        st.session_state.last_skill_id = skill_obj["id"]
+        st.session_state.skill_round = 1
+        st.session_state.chat_history = []
+
+    st.session_state.prev_skill_name = selected_skill_name
 
 # 状态栏
 if st.session_state.current_skill:
@@ -494,30 +496,28 @@ if st.session_state.current_skill:
         f"阶段: {level_name} | {round_label}"
     )
 
-# ── 数据加载 ─────────────────────────────────────────────
+# ── 数据加载 ────────────────────────────────────────
 if not st.session_state.data_loaded:
     with st.spinner(f"加载 {st.session_state.current_symbol} 数据..."):
         df, main_code = load_data(st.session_state.current_symbol)
-        if df is not None and len(df) > 0:
-            st.session_state.kline_data          = df
-            st.session_state.main_contract       = main_code
-            st.session_state.structural_features = calc_structural_features(df)
-            st.session_state.data_loaded         = True
-            st.session_state.data_error          = None
-        else:
-            st.session_state.data_error = f"⚠️ {st.session_state.current_symbol} 数据加载失败，已自动重试3次。可能原因：1.新浪接口临时限流，稍等后重试；2.合约代码不存在"
 
-# ── 图表区 ───────────────────────────────────────────────
+        if df is not None and len(df) > 0:
+            st.session_state.kline_data = df
+            st.session_state.main_contract = main_code
+            st.session_state.structural_features = calc_structural_features(df)
+            st.session_state.data_loaded = True
+            st.session_state.data_error = None
+        else:
+            st.session_state.data_error = "数据加载失败"
+
+# ── 图表区 ──────────────────────────────────────────
 if st.session_state.data_loaded and st.session_state.kline_data is not None:
-    fig = plot_kline(
-        st.session_state.kline_data,
-        st.session_state.structural_features,
-        n_bars,
-    )
+    fig = plot_kline(st.session_state.kline_data, st.session_state.structural_features)
     st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True})
 elif st.session_state.data_error:
     st.error(st.session_state.data_error)
 
+# 更新侧栏数据信息
 if st.session_state.data_loaded and st.session_state.kline_data is not None:
     data_display.caption(
         f"合约: {st.session_state.main_contract or st.session_state.current_symbol} | "
@@ -526,19 +526,22 @@ if st.session_state.data_loaded and st.session_state.kline_data is not None:
 
 st.markdown("---")
 
-# ── 对话区 ───────────────────────────────────────────────
+# ── 对话区 ──────────────────────────────────────────
 if st.session_state.current_skill is None:
     st.info("👈 从左侧侧栏选择品种、阶段和技能目的开始训练")
 else:
-    skill      = st.session_state.current_skill
-    is_round2  = st.session_state.skill_round == 2
+    skill = st.session_state.current_skill
+    is_round2 = st.session_state.skill_round == 2
 
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    # 改动6：用 guide_sent 布尔值判断，不再匹配字符串
-    if not is_round2 and not st.session_state.guide_sent:
+    has_guide = any(
+        m["role"] == "assistant" and "当前技能目的" in m.get("content", "")
+        for m in st.session_state.chat_history[-5:]
+    )
+    if not is_round2 and not has_guide:
         with st.chat_message("assistant"):
             with st.spinner("AI思考中..."):
                 market_msg = _market_msg(st.session_state.kline_data)
@@ -546,15 +549,12 @@ else:
                     skill_name=skill["name"],
                     skill_question=skill["question"],
                     market_msg=market_msg,
-                    level_name=level_name,     # 改动1：显式传参
-                    level_desc=level_desc,     # 改动1：显式传参
                     is_second_round=False,
                 )
             st.markdown(reply)
         st.session_state.chat_history.append({"role": "assistant", "content": reply})
-        st.session_state.guide_sent = True     # 改动6：标记已发送
 
-    prompt     = "你的观察是？" if not is_round2 else "你的回答是？(第2轮)"
+    prompt = "你的观察是？" if not is_round2 else "你的回答是？(第2轮)"
     user_input = st.chat_input(prompt)
     if user_input:
         with st.chat_message("user"):
@@ -568,8 +568,6 @@ else:
                     skill_name=skill["name"],
                     skill_question=skill["question"],
                     market_msg=market_msg,
-                    level_name=level_name,     # 改动1：显式传参
-                    level_desc=level_desc,     # 改动1：显式传参
                     user_input=user_input,
                     is_second_round=is_round2,
                 )
@@ -578,10 +576,10 @@ else:
 
         if is_round2:
             st.session_state.skill_round = 1
-            st.session_state.guide_sent  = False  # 改动6：第2轮结束后重置，允许下轮重新引导
 
-# ── 样式 ─────────────────────────────────────────────────
-st.markdown("""
+# ── 紧凑样式 ────────────────────────────────────────
+st.markdown(
+    """
 <style>
     .stApp { margin: 0; padding: 0; }
     .block-container { padding: 0.8rem 2rem 0.8rem 2rem !important; max-width: 100%; }
@@ -590,4 +588,6 @@ st.markdown("""
     hr { margin: 6px 0 !important; }
     .stPlotlyChart { margin: 0 !important; }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
