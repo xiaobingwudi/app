@@ -1,8 +1,3 @@
-"""
-Al Brooks 结构训练器 V23
-侧栏：品种选择（恢复V17完整版）+ 训练阶段 + 技能选择(radio垂直)
-主区域：图表 + 对话区
-"""
 import json, time, random
 from datetime import datetime, date
 from typing import Optional
@@ -26,7 +21,6 @@ PRODUCT_CATEGORIES = {
     "农产品": ["M0", "Y0", "P0", "A0", "B0", "C0", "CS0", "JD0", "AP0", "CF0"],
     "能源": ["SC0", "L0"],
 }
-# 默认展开的品类
 DEFAULT_EXPANDED = ["金融"]
 
 # ── 5个技能定义 ─────────────────────────────────────────
@@ -38,11 +32,17 @@ SKILLS = [
     {"id": 5, "name": "市场接受",   "question": "市场是否接受了新价格？"},
 ]
 
+# ── AI配置（从Streamlit Cloud Secrets读取） ────────────
+AI_CONFIG = {
+    "base_url": st.secrets["ai"]["base_url"],
+    "api_key": st.secrets["ai"]["api_key"],
+    "model": st.secrets["ai"]["model"],
+}
+
 # ── 侧栏 ────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("**品种选择**")
 
-    # 品种分类按钮
     current_symbol = st.session_state.get("current_symbol", "RB0")
     for cat_name, symbols in PRODUCT_CATEGORIES.items():
         expanded = cat_name in DEFAULT_EXPANDED
@@ -51,8 +51,8 @@ with st.sidebar:
             for i, sym in enumerate(symbols):
                 col = cols[i % len(cols)]
                 btn_style = "primary" if sym == current_symbol else "secondary"
-                if col.button(sym, key=f"sym_{sym}", type=btn_style, use_container_width=True):
-                    current_symbol = sym
+                # key用品类+品种，避免L0在化工和能源中重复
+                if col.button(sym, key=f"sym_{cat_name}_{sym}", type=btn_style, use_container_width=True):
                     st.session_state.current_symbol = sym
                     st.session_state.data_loaded = False
                     st.session_state.kline_data = None
@@ -192,8 +192,8 @@ def ask_coach(
     from openai import OpenAI
 
     client = OpenAI(
-        base_url="https://www.right.codes/codex/v1",
-        api_key="sk-KIhnn3eQ0A8mR1eI0a8fC7bBe3d3FfD1BfD3FfD1BfD3FfD1BfD1BfD1BfD1",
+        base_url=AI_CONFIG["base_url"],
+        api_key=AI_CONFIG["api_key"],
     )
 
     system_prompt = AI_SYSTEM_PROMPT_TEMPLATE.format(
@@ -227,7 +227,7 @@ def ask_coach(
 
     try:
         resp = client.chat.completions.create(
-            model="gpt-5.5",
+            model=AI_CONFIG["model"],
             messages=messages,
             temperature=0.2,
             max_tokens=700,
@@ -382,10 +382,10 @@ for key, default in [
         st.session_state[key] = default
 
 # ═══════════════════════════════════════════════════════════
-#  主界面：状态文字 + 图表 + 对话区
+#  主界面
 # ═══════════════════════════════════════════════════════════
 
-# ── 侧栏技能选择处理 ────────────────────────────────
+# ── 技能选择处理 ────────────────────────────────────
 if selected_skill_name is not None and selected_skill_name != st.session_state.prev_skill_name:
     skill_obj = next(s for s in SKILLS if s["name"] == selected_skill_name)
 
@@ -399,12 +399,12 @@ if selected_skill_name is not None and selected_skill_name != st.session_state.p
 
     st.session_state.prev_skill_name = selected_skill_name
 
-# 显示当前技能状态
+# 状态栏
 if st.session_state.current_skill:
     skill = st.session_state.current_skill
     round_label = "第1轮(引导)" if st.session_state.skill_round == 1 else "第2轮(点评)"
     st.caption(
-        f"当前品种: {st.session_state.current_symbol} | "
+        f"品种: {st.session_state.current_symbol} | "
         f"技能: {skill['name']} — {skill['question']} | "
         f"阶段: {level_name} | {round_label}"
     )
