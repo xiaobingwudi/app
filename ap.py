@@ -1,8 +1,6 @@
 """
-Al Brooks 结构训练器 V18 - 修复版
-修复：统一AI配置、统一数据获取
+Al Brooks 结构训练器 V18
 """
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -14,9 +12,6 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import random, json, time, re
 
-# ============================================================
-# 品种映射
-# ============================================================
 SYMBOL_NAMES = {
     "IF": "沪深300股指", "IH": "上证50股指", "IC": "中证500股指", "IM": "中证1000股指",
     "CU": "沪铜", "AL": "沪铝", "ZN": "沪锌", "PB": "沪铅", "NI": "沪镍", "SN": "沪锡",
@@ -32,9 +27,6 @@ SYMBOL_NAMES = {
     "TS": "2年期国债", "TF": "5年期国债", "T": "10年期国债", "TL": "30年期国债",
 }
 
-# ============================================================
-# Prompt 模板
-# ============================================================
 AI_SYSTEM_PROMPT_TEMPLATE = """你是 Al Brooks 价格行为训练教练。
 
 【你的双重职责】
@@ -97,89 +89,34 @@ AI_SUMMARY_PROMPT = """你是训练总结分析师。根据训练对话记录，
 }
 要求：每条分析具体，引用训练中的实际表现，不要笼统评价，要有可操作性。"""
 
-# ============================================================
-# AI配置（统一使用 DeepSeek）
-# ============================================================
-def get_ai_client():
-    """获取统一的AI客户端"""
-    api_key = st.secrets.get("OPENAI_API_KEY", "")
-    if not api_key:
-        api_key = st.secrets.get("DEEPSEEK_API_KEY", "")
-    
-    return OpenAI(
-        base_url="https://api.deepseek.com/v1",
-        api_key=api_key,
-    )
-
-# ============================================================
-# 数据加载（统一接口）
-# ============================================================
-def load_data(symbol, period="30"):
-    """加载K线数据"""
-    for attempt in range(3):
-        try:
-            df = ak.futures_zh_minute_sina(symbol=symbol, period=period)
-            if df is not None and not df.empty:
-                # 标准化列名
-                df = df.rename(columns={
-                    "date": "datetime", "datetime": "datetime",
-                    "open": "open", "high": "high",
-                    "low": "low", "close": "close",
-                    "volume": "volume",
-                })
-                df = df.dropna(subset=["open", "high", "low", "close"])
-                df = df.reset_index(drop=True)
-                return df
-        except Exception as e:
-            if attempt < 2:
-                time.sleep(1)
-                continue
-            st.error(f"数据加载失败: {e}")
-            return None
-    return None
-
-
-def get_main_contracts():
-    """获取主力合约"""
+def load_data(symbol, period="30", seed=0):
     try:
-        result = {}
-        for ex in ["shfe", "dce", "czce", "cffex", "gfex"]:
-            try:
-                data = ak.match_main_contract(symbol=ex)
-                if data:
-                    contracts = str(data).split(",")
-                    for c in contracts:
-                        c = c.strip()
-                        if len(c) >= 3:
-                            result[c] = c
-            except Exception:
-                continue
-        return result
-    except Exception:
-        return {}
+        df = ak.futures_zh_minute_sina(symbol=symbol, period=period)
+    except Exception as e:
+        st.error(f"数据加载失败: {e}")
+        return None
+    if df is None or len(df) == 0:
+        st.error(f"{symbol} 无数据")
+        return None
+    df = df.rename(columns={
+        "date": "time", "open": "open", "high": "high",
+        "low": "low", "close": "close", "volume": "volume",
+        "open_interest": "open_interest",
+    })
+    df = df.reset_index(drop=True)
+    return df
 
-
-# ============================================================
-# 图表绘制
-# ============================================================
-def build_chart(chart_df, bar):
+def build_chart(chart_df, bar, mode="strict"):
     end = bar + 1
     start = max(0, end - 60)
     df = chart_df.iloc[start:end].copy().reset_index(drop=True)
-    
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
-                        vertical_spacing=0.02, row_heights=[0.8, 0.2])
-    
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.02, row_heights=[0.8, 0.2])
     fig.add_trace(go.Candlestick(
-        x=df.index, open=df["open"], high=df["high"], 
-        low=df["low"], close=df["close"],
+        x=df.index, open=df["open"], high=df["high"], low=df["low"], close=df["close"],
         showlegend=False, increasing_line_color="red", decreasing_line_color="cyan",
     ), row=1, col=1)
-    
     colors = ["red" if c >= o else "cyan" for o, c in zip(df["open"], df["close"])]
-    fig.add_trace(go.Bar(x=df.index, y=df["volume"], marker_color=colors, 
-                         showlegend=False, opacity=0.5), row=2, col=1)
-    
+    fig.add_trace(go.Bar(x=df.index, y=df["volume"], marker_color=colors, showlegend=False, opacity=0.5), row=2, col=1)
     for idx in range(len(df)):
         if idx % 5 == 0:
             row = df.iloc[idx]
@@ -187,7 +124,6 @@ def build_chart(chart_df, bar):
             fig.add_annotation(x=idx, y=ny, text=str(df.index[idx] + start),
                                showarrow=False, font=dict(size=9, color="gray"),
                                yshift=-10 if row["close"] >= row["open"] else 10)
-    
     fig.add_vline(x=bar-start, line_dash="dash", line_color="orange", line_width=1, opacity=0.6)
     fig.update_layout(xaxis_rangeslider_visible=False, height=600,
                       margin=dict(l=20, r=20, t=10, b=10),
@@ -196,18 +132,12 @@ def build_chart(chart_df, bar):
     fig.update_yaxes(showgrid=True, gridcolor="#f0f0f0")
     return fig
 
-
-# ============================================================
-# 市场消息
-# ============================================================
 def _market_msg(chart_df, bar, skill_name):
     last = st.session_state.get("_mm_cache", {})
     if last.get("bar") == bar and last.get("skill") == skill_name:
         return last["data"]
-    
     start = max(0, bar - 40)
     all_bars = []
-    
     for i in range(start, bar + 1):
         row = chart_df.iloc[i]
         o, h, l, c = float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"])
@@ -215,152 +145,85 @@ def _market_msg(chart_df, bar, skill_name):
         total_range = h - l
         body_ratio = body / total_range if total_range > 0 else 0
         direction = "阳" if c >= o else "阴"
-        
-        if body_ratio >= 0.7:
-            k_type = "大阳线" if direction == "阳" else "大阴线"
-        elif body_ratio >= 0.4:
-            k_type = "中阳线" if direction == "阳" else "中阴线"
-        elif body_ratio >= 0.1:
-            k_type = "小阳线" if direction == "阳" else "小阴线"
-        else:
-            k_type = "十字星"
-        
-        all_bars.append({
-            "i": i, "o": o, "h": h, "l": l, "c": c,
-            "direction": direction, "type": k_type,
-            "body": body, "body_ratio": body_ratio, "total_range": total_range
-        })
-    
+        if body_ratio >= 0.7: k_type = "大阳线" if direction == "阳" else "大阴线"
+        elif body_ratio >= 0.4: k_type = "中阳线" if direction == "阳" else "中阴线"
+        elif body_ratio >= 0.1: k_type = "小阳线" if direction == "阳" else "小阴线"
+        else: k_type = "十字星"
+        all_bars.append({"i": i, "o": o, "h": h, "l": l, "c": c,
+                         "direction": direction, "type": k_type,
+                         "body": body, "body_ratio": body_ratio, "total_range": total_range})
     lines = [f"【当前K线】第{bar}号K线", "", "【最近行情描述】"]
     recent = all_bars[-15:] if len(all_bars) >= 15 else all_bars
-    
     for idx, k in enumerate(recent):
         change_desc = ""
         if idx > 0:
             prev = recent[idx-1]
             pc = k["c"] - prev["c"]
-            if abs(pc) > k["total_range"] * 0.5 and k["total_range"] > 0:
+            if abs(pc) > k["total_range"]*0.5 and k["total_range"] > 0:
                 change_desc = f"，相比前一根{'大涨' if pc>0 else '大跌'}了{abs(pc):.1f}"
-            elif pc > 0:
-                change_desc = f"，比前一根涨了{pc:.1f}"
-            elif pc < 0:
-                change_desc = f"，比前一根跌了{abs(pc):.1f}"
-            else:
-                change_desc = "，与前一根收盘持平"
-        
+            elif pc > 0: change_desc = f"，比前一根涨了{pc:.1f}"
+            elif pc < 0: change_desc = f"，比前一根跌了{abs(pc):.1f}"
+            else: change_desc = "，与前一根收盘持平"
         uw = k["h"] - max(k["o"], k["c"])
         lw = min(k["o"], k["c"]) - k["l"]
         wp = []
         if k["body"] > 0:
-            if uw > k["body"] * 2:
-                wp.append("上影线很长")
-            if lw > k["body"] * 2:
-                wp.append("下影线很长")
+            if uw > k["body"]*2: wp.append("上影线很长")
+            if lw > k["body"]*2: wp.append("下影线很长")
         wt = f"，{','.join(wp)}" if wp else ""
-        
         lines.append(f"  K{k['i']}: {k['type']}，开{k['o']:.0f} 收{k['c']:.0f} 高{k['h']:.0f} 低{k['l']:.0f}{wt}{change_desc}")
-    
     lines.extend(["", "【整体市场感知】"])
-    
     if len(all_bars) >= 10:
         last_10 = all_bars[-10:]
-        yg = sum(1 for k in last_10 if k["direction"] == "阳")
-        yn = 10 - yg
-        
-        if yg >= 7:
-            bias = "近期明显偏多，阳线占主导"
-        elif yn >= 7:
-            bias = "近期明显偏空，阴线占主导"
-        elif yg >= 6:
-            bias = "近期略偏多"
-        elif yn >= 6:
-            bias = "近期略偏空"
-        else:
-            bias = "近期多空平衡，无明显偏向"
+        yg = sum(1 for k in last_10 if k["direction"]=="阳")
+        yn = 10-yg
+        if yg>=7: bias="近期明显偏多，阳线占主导"
+        elif yn>=7: bias="近期明显偏空，阴线占主导"
+        elif yg>=6: bias="近期略偏多"
+        elif yn>=6: bias="近期略偏空"
+        else: bias="近期多空平衡，无明显偏向"
         lines.append(f"  * {bias}（最近10根中{yg}阳{yn}阴）")
-        
         tc = all_bars[-1]["c"] - all_bars[0]["c"]
-        if tc > 0:
-            lines.append(f"  * 整体向上，累计上涨{tc:.1f}")
-        elif tc < 0:
-            lines.append(f"  * 整体向下，累计下跌{abs(tc):.1f}")
-        else:
-            lines.append("  * 整体持平")
-        
+        if tc>0: lines.append(f"  * 整体向上，累计上涨{tc:.1f}")
+        elif tc<0: lines.append(f"  * 整体向下，累计下跌{abs(tc):.1f}")
+        else: lines.append("  * 整体持平")
         lines.append(f"  * 最近10根平均波幅{sum(k['total_range'] for k in last_10)/10:.1f}")
-        
         cons, mc = 1, 1
         for i in range(1, len(last_10)):
-            cons = cons + 1 if last_10[i]["direction"] == last_10[i-1]["direction"] else 1
+            cons = cons+1 if last_10[i]["direction"]==last_10[i-1]["direction"] else 1
             mc = max(mc, cons)
-        if mc >= 4:
-            lines.append(f"  * 出现连续{mc}根{last_10[-1]['direction']}线，趋势有延续性")
-    
+        if mc>=4: lines.append(f"  * 出现连续{mc}根{last_10[-1]['direction']}线，趋势有延续性")
     lines.extend(["", f"【当前训练技能】{skill_name}"])
     result = "\n".join(lines)
     st.session_state["_mm_cache"] = {"bar": bar, "skill": skill_name, "data": result}
     return result
 
-
-# ============================================================
-# AI调用（统一使用 DeepSeek）
-# ============================================================
 def _gpt(messages):
-    """统一的AI调用函数"""
-    client = get_ai_client()
-    
-    for attempt in range(3):
-        try:
-            resp = client.chat.completions.create(
-                model="deepseek-chat",
-                messages=messages,
-                temperature=0.3,
-                max_tokens=800,
-            )
-            return resp.choices[0].message.content.strip()
-        except Exception as e:
-            if attempt < 2:
-                time.sleep(2 ** (attempt + 1))
-                continue
-            return f"AI调用失败: {e}"
-
+    try:
+        client = OpenAI(base_url="https://www.right.codes/codex/v1", api_key=st.secrets.get("OPENAI_API_KEY", ""))
+    except Exception:
+        client = OpenAI(base_url="https://www.right.codes/codex/v1", api_key="")
+    resp = client.chat.completions.create(model="gpt-5.5", messages=messages, temperature=0.2, max_tokens=700)
+    return resp.choices[0].message.content
 
 def ask_coach(chart_df, bar, skill_name, skill_question, dialogue, level=1, is_second_round=False):
     lv = TRAIN_LEVEL.get(level, TRAIN_LEVEL[1])
-    sp = AI_SYSTEM_PROMPT_TEMPLATE.format(
-        skill_name=skill_name, 
-        level_name=lv["name"], 
-        level_desc=lv["desc"], 
-        skill_question=skill_question
-    )
+    sp = AI_SYSTEM_PROMPT_TEMPLATE.format(skill_name=skill_name, level_name=lv["name"], level_desc=lv["desc"], skill_question=skill_question)
     if is_second_round:
         sp += "\n\n【这是第2轮】你必须：1) 点评用户的回答  2) 亮出你自己的判断（引用具体K线编号）"
-    
     msgs = [{"role": "system", "content": sp}]
     msgs.append({"role": "user", "content": _market_msg(chart_df, bar, skill_name)})
-    
     for m in dialogue[-10:]:
         msgs.append({"role": m["role"], "content": m["content"]})
-    
     return _gpt(msgs)
-
 
 def ask_summary(dialogue, observations):
     if not dialogue and not observations:
-        return json.dumps({"observations": ["暂无训练数据"], "strong_areas": [], "weak_areas": [], "next_focus": []})
-    
+        return json.dumps({"observations":["暂无训练数据"], "strong_areas":[], "weak_areas":[], "next_focus":[]})
     ot = "\n".join(f"- {o['text']}" for o in observations[-20:])
-    dt = "\n".join("{}: {}".format("用户" if m["role"] == "user" else "教练", m["content"]) for m in dialogue[-40:])
-    
-    return _gpt([
-        {"role": "system", "content": AI_SUMMARY_PROMPT}, 
-        {"role": "user", "content": f"【观察】\n{ot}\n\n【对话】\n{dt}"}
-    ])
+    dt = "\n".join("{}: {}".format("用户" if m["role"]=="user" else "教练", m["content"]) for m in dialogue[-40:])
+    return _gpt([{"role":"system","content":AI_SUMMARY_PROMPT}, {"role":"user","content":f"【观察】\n{ot}\n\n【对话】\n{dt}"}])
 
-
-# ============================================================
-# 技能定义
-# ============================================================
 SKILLS = [
     {"id": 1, "name": "背景阅读",   "question": "当前市场背景是什么？"},
     {"id": 2, "name": "控制权识别", "question": "现在谁在控制市场？"},
@@ -369,184 +232,140 @@ SKILLS = [
     {"id": 5, "name": "市场接受",   "question": "市场是否接受了新价格？"},
 ]
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _fetch_all_contracts():
+    def _fetch_one(ex):
+        try:
+            result = ak.match_main_contract(symbol=ex)
+            return str(result).split(",")
+        except Exception:
+            return []
+    mc = {}
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(_fetch_one, ex): ex for ex in ["shfe", "dce", "czce", "cffex", "gfex"]}
+        for future in as_completed(futures):
+            for c in future.result():
+                c = c.strip()
+                if len(c)<3: continue
+                code = "".join(ch for ch in c[:4] if ch.isalpha()).upper()
+                if code in SYMBOL_NAMES and code not in mc: mc[code]=c
+    return mc
 
-# ============================================================
-# 辅助函数
-# ============================================================
-def _send(text, chart_df, bar, skill):
-    s = st.session_state
-    dlg = s["coach_dialogue"]
-    dlg.append({"role": "user", "content": text})
-    s["observations"].append({
-        "skill_id": s.get("train_mode", 1), 
-        "bar": bar, 
-        "text": text, 
-        "timestamp": datetime.now().strftime("%H:%M:%S")
-    })
-    
-    with st.spinner("教练思考中..."):
-        resp = ask_coach(
-            chart_df, bar, skill["name"], skill["question"], dlg,
-            level=s.get("train_level", 1), 
-            is_second_round=(s["skill_round"] >= 1)
-        )
-    
-    s["skill_round"] += 1
-    if s["skill_round"] >= 2:
-        resp += "\n\n---\n本项技能训练结束，可切换下一项继续。"
-    
-    dlg.append({"role": "assistant", "content": resp})
-    s["coach_dialogue"] = dlg
-    s["send_counter"] = s.get("send_counter", 0) + 1
-    st.rerun()
-
+def _load_all_main_contracts(mc):
+    mc.update(_fetch_all_contracts())
 
 def _do_load(sym_code, sym_main):
     with st.spinner("加载中..."):
-        df = load_data(sym_main, period="60")
-        if df is not None and len(df) > 0:
-            st.session_state["chart_df"] = df
-            st.session_state["current_bar"] = min(40, len(df) - 1)
-            st.session_state["coach_dialogue"] = []
-            st.session_state["observations"] = []
-            st.session_state["training_summary"] = ""
-            st.session_state["skill_round"] = 0
-            st.session_state["send_counter"] = 0
-            st.session_state["_mm_cache"] = {}
-            st.session_state["symbol_code"] = sym_code
-            st.session_state["symbol_main"] = sym_main
-            st.session_state["symbol_name"] = SYMBOL_NAMES.get(sym_code, sym_code)
+        df = load_data(sym_main, seed=random.randint(0, 999999))
+        if df is not None:
+            st.session_state["chart_df"]=df; st.session_state["current_bar"]=40
+            st.session_state["coach_dialogue"]=[]; st.session_state["observations"]=[]
+            st.session_state["training_summary"]=""; st.session_state["skill_round"]=0
+            st.session_state["send_counter"]=0; st.session_state["_mm_cache"]={}
+            st.session_state["symbol_code"]=sym_code; st.session_state["symbol_main"]=sym_main
+            st.session_state["symbol_name"]=SYMBOL_NAMES.get(sym_code, sym_code)
             st.success(f"已加载 {SYMBOL_NAMES.get(sym_code, sym_code)} ({sym_main})")
-            time.sleep(0.5)
-            st.rerun()
-        else:
-            st.error(f"加载失败: {sym_main}")
+            time.sleep(0.5); st.rerun()
 
-
-# ============================================================
-# 主程序
-# ============================================================
 def main():
     st.set_page_config(page_title="Al Brooks 结构训练器", layout="wide")
 
-    # 初始化 session_state
-    defaults = {
-        "chart_df": None, "current_bar": 40, "coach_dialogue": [], 
-        "send_counter": 0, "training_summary": "", "skill_round": 0, 
-        "train_level": 1, "train_mode": 1, "observations": [],
-        "symbol_code": "", "symbol_main": "", "symbol_name": "", 
-        "_mm_cache": {},
-    }
-    for k, v in defaults.items():
-        if k not in st.session_state:
-            st.session_state[k] = v
+    # 移除所有自定义CSS，使用Streamlit原生布局
 
-    # 侧边栏
+    for k, v in {
+        "chart_df":None, "current_bar":40, "coach_dialogue":[], "send_counter":0,
+        "training_summary":"", "skill_round":0, "train_level":1, "observations":[],
+        "symbol_code":"", "symbol_main":"", "symbol_name":"", "_mm_cache":{},
+    }.items():
+        if k not in st.session_state: st.session_state[k]=v
+
     with st.sidebar:
         st.markdown("### 品种选择")
-        
         exchanges = {
-            "金融": ["IF", "IH", "IC", "IM", "TS", "TF", "T", "TL"],
-            "有色": ["CU", "AL", "ZN", "PB", "NI", "SN", "AU", "AG", "BC"],
-            "黑色": ["RB", "HC", "SS", "I", "J", "JM"],
-            "化工": ["MA", "TA", "PP", "L", "V", "EG", "EB", "PG", "SA", "UR", "SF", "SM", "PF"],
-            "农产品": ["A", "B", "M", "Y", "P", "C", "CS", "JD", "CF", "SR", "RM", "OI", "FG", "AP", "CJ", "PK", "LH"],
-            "能源": ["SC", "FU", "BU", "LU", "NR", "RU"],
+            "金融":["IF","IH","IC","IM","TS","TF","T","TL"],
+            "有色":["CU","AL","ZN","PB","NI","SN","AU","AG","BC"],
+            "黑色":["RB","HC","SS","I","J","JM"],
+            "化工":["MA","TA","PP","L","V","EG","EB","PG","SA","UR","SF","SM","PF"],
+            "农产品":["A","B","M","Y","P","C","CS","JD","CF","SR","RM","OI","FG","AP","CJ","PK","LH"],
+            "能源":["SC","FU","BU","LU","NR","RU"],
         }
-        
-        mc = get_main_contracts()
-        
+        mc={}; _load_all_main_contracts(mc)
         for cat, codes in exchanges.items():
-            with st.expander(cat, expanded=(cat == "金融")):
-                cols = st.columns(3)
+            with st.expander(cat, expanded=(cat=="金融")):
+                cols=st.columns(3)
                 for idx, code in enumerate(codes):
                     if code in mc:
-                        if cols[idx % 3].button(code, key=f"sym_{code}", use_container_width=True):
-                            _do_load(code, mc[code])
-        
+                        if cols[idx%3].button(code, key=f"sym_{code}", use_container_width=True): _do_load(code, mc[code])
         st.divider()
-        
-        level = st.selectbox(
-            "训练阶段", options=[1, 2, 3],
-            format_func=lambda x: f"阶段{x}: {TRAIN_LEVEL[x]['name']}",
-            index=st.session_state.get("train_level", 1) - 1,
-            key="train_level_sel"
-        )
-        st.session_state["train_level"] = level
-        
+        level=st.selectbox("训练阶段", options=[1,2,3], format_func=lambda x:f"阶段{x}: {TRAIN_LEVEL[x]['name']}",
+                           index=st.session_state.get("train_level",1)-1, key="train_level_sel")
+        st.session_state["train_level"]=level
         st.divider()
-        st.caption(f"当前: {st.session_state.get('symbol_name', '未选择')}")
-        
+        st.caption(f"当前: {st.session_state.get('symbol_name','未选择')}")
         if st.session_state.get("chart_df") is not None:
-            df = st.session_state["chart_df"]
+            df=st.session_state["chart_df"]
             st.caption(f"数据: {len(df)} 根K线 | Bar: {st.session_state['current_bar']}")
-            bar = st.slider("K线位置", 41, len(df) - 1, 
-                           value=st.session_state["current_bar"], key="bar_slider")
-            st.session_state["current_bar"] = bar
-            
+            bar=st.slider("K线位置", 41, len(df)-1, value=st.session_state["current_bar"], key="bar_slider")
+            st.session_state["current_bar"]=bar
             if st.button("生成总结", use_container_width=True):
                 with st.spinner("分析中..."):
-                    st.session_state["training_summary"] = ask_summary(
-                        st.session_state["coach_dialogue"], 
-                        st.session_state["observations"]
-                    )
+                    st.session_state["training_summary"]=ask_summary(st.session_state["coach_dialogue"], st.session_state["observations"])
                     st.rerun()
-            
             if st.session_state.get("training_summary"):
-                with st.expander("训练总结", expanded=True):
-                    st.text(st.session_state["training_summary"])
+                with st.expander("训练总结", expanded=True): st.text(st.session_state["training_summary"])
 
-    # 主界面
-    df = st.session_state.get("chart_df")
+    df=st.session_state.get("chart_df")
     if df is None:
-        st.info("请从左侧选择品种开始训练")
-        return
-    
-    bar = st.session_state["current_bar"]
-    
-    # 技能按钮
+        st.info("请从左侧选择品种开始训练"); return
+    bar=st.session_state["current_bar"]
+
+    # 用container隔离技能按钮区域，防止被图表覆盖
     with st.container():
-        current_skill_id = st.session_state.get("train_mode", 1)
-        cols = st.columns(5)
+        current_skill_id=st.session_state.get("train_mode",1)
+        cols=st.columns(5)
         for idx, sk in enumerate(SKILLS):
-            is_active = (sk["id"] == current_skill_id)
+            is_active=(sk["id"]==current_skill_id)
             if cols[idx].button(sk["name"], type="primary" if is_active else "secondary",
                                 use_container_width=True, key=f"skill_{sk['id']}"):
-                st.session_state["train_mode"] = sk["id"]
-                st.session_state["coach_dialogue"] = []
-                st.session_state["skill_round"] = 0
-                st.session_state["send_counter"] = 0
+                st.session_state["train_mode"]=sk["id"]
+                st.session_state["coach_dialogue"]=[]; st.session_state["skill_round"]=0; st.session_state["send_counter"]=0
                 st.rerun()
-        
-        active_skill = next(sk for sk in SKILLS if sk["id"] == current_skill_id)
-        st.caption(f"当前技能: {active_skill['name']} | 阶段: {TRAIN_LEVEL[st.session_state['train_level']]['name']} | 第{st.session_state['skill_round'] + 1}/2 轮")
-    
-    # 图表
+        active_skill=next(sk for sk in SKILLS if sk["id"]==current_skill_id)
+        st.caption(f"当前技能: {active_skill['name']} | 阶段: {TRAIN_LEVEL[st.session_state['train_level']]['name']} | 第{st.session_state['skill_round']+1}/2 轮")
+
+    # 用container隔离图表
     with st.container():
         st.plotly_chart(build_chart(df, bar), use_container_width=True)
-    
-    # 对话区域
+
+    # 用container隔离对话区域
     with st.container():
         st.markdown("### 教练")
-        
         for m in st.session_state["coach_dialogue"][-10:]:
-            with st.chat_message("user" if m["role"] == "user" else "assistant"):
-                st.markdown(f"**{'🧑 你' if m['role'] == 'user' else '🤖 教练'}**")
+            with st.chat_message("user" if m["role"]=="user" else "assistant"):
+                st.markdown(f"**{'🧑 你' if m['role']=='user' else '🤖 教练'}**")
                 st.markdown(m["content"])
-        
-        s = st.session_state
-        can_input = s.get("skill_round", 0) < 2 and s.get("chart_df") is not None
-        
+
+        s=st.session_state
+        can_input=s.get("skill_round",0)<2 and s.get("chart_df") is not None
         if can_input:
-            prompt = st.chat_input("分享你对当前行情的观察...")
+            prompt=st.chat_input("分享你对当前行情的观察...")
         else:
-            if s.get("skill_round", 0) >= 2:
-                st.info("本项技能训练结束，点击上方技能按钮切换下一项继续训练。")
-            prompt = None
-        
-        if prompt:
-            _send(prompt, df, bar, active_skill)
+            if s.get("skill_round",0)>=2: st.info("本项技能训练结束，点击上方技能按钮切换下一项继续训练。")
+            prompt=None
+        if prompt: _send(prompt, df, bar, active_skill)
 
+def _send(text, chart_df, bar, skill):
+    s=st.session_state
+    dlg=s["coach_dialogue"]
+    dlg.append({"role":"user","content":text})
+    s["observations"].append({"skill_id":s.get("train_mode",1),"bar":bar,"text":text,"timestamp":datetime.now().strftime("%H:%M:%S")})
+    with st.spinner("教练思考中..."):
+        resp=ask_coach(chart_df, bar, skill["name"], skill["question"], dlg,
+                       level=s.get("train_level",1), is_second_round=(s["skill_round"]>=1))
+    s["skill_round"]+=1
+    if s["skill_round"]>=2: resp+="\n\n---\n本项技能训练结束，可切换下一项继续。"
+    dlg.append({"role":"assistant","content":resp})
+    s["coach_dialogue"]=dlg; s["send_counter"]=s.get("send_counter",0)+1; st.rerun()
 
-if __name__ == "__main__":
+if __name__=="__main__":
     main()
