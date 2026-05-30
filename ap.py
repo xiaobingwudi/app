@@ -8,6 +8,7 @@ Al Brooks 结构训练器 V18
   4. 对话记忆扩大到最近10轮
   5. 第2轮强制点评+亮判断
   6. 布局严格保持V17风格
+  7. 适配 DeepSeek API
 """
 
 import streamlit as st
@@ -107,7 +108,7 @@ AI_SUMMARY_PROMPT = """你是训练总结分析师。根据训练对话记录，
 # ============================================================
 # 数据加载
 # ============================================================
-def load_data(symbol, period="30", seed=0):
+def load_data(symbol, period="30", seed=None):
     try:
         df = ak.futures_zh_minute_sina(symbol=symbol, period=period)
     except Exception as e:
@@ -119,15 +120,26 @@ def load_data(symbol, period="30", seed=0):
     df = df.rename(columns={
         "date": "time", "open": "open", "high": "high",
         "low": "low", "close": "close", "volume": "volume",
-        "open_interest": "open_interest",
     })
-    df = df.reset_index(drop=True)
+    
+    # 处理可能存在的 open_interest 列
+    if "open_interest" in df.columns:
+        df = df.drop(columns=["open_interest"])
+    
+    df = df.dropna().reset_index(drop=True)
+    
+    # 随机截取一段
+    if seed is not None and len(df) > 300:
+        rng = random.Random(seed)
+        start = rng.randint(0, len(df) - 300)
+        df = df.iloc[start:start+300].reset_index(drop=True)
+    
     return df
 
 # ============================================================
 # 图表构建
 # ============================================================
-def build_chart(chart_df, bar, mode="strict"):
+def build_chart(chart_df, bar):
     end = bar + 1
     start = max(0, end - 60)
     df = chart_df.iloc[start:end].copy().reset_index(drop=True)
@@ -228,8 +240,10 @@ def _market_msg(chart_df, bar, skill_name):
         lower_wick = min(k["o"], k["c"]) - k["l"]
         wick_parts = []
         if k["body"] > 0:
-            if upper_wick > k["body"] * 2: wick_parts.append("上影线很长")
-            if lower_wick > k["body"] * 2: wick_parts.append("下影线很长")
+            if upper_wick > k["body"] * 2:
+                wick_parts.append("上影线很长")
+            if lower_wick > k["body"] * 2:
+                wick_parts.append("下影线很长")
         wick_text = f"，{','.join(wick_parts)}" if wick_parts else ""
 
         lines.append(f"  K{k['i']}: {k['type']}，开{k['o']:.0f} 收{k['c']:.0f} 高{k['h']:.0f} 低{k['l']:.0f}{wick_text}{change_desc}")
@@ -241,23 +255,34 @@ def _market_msg(chart_df, bar, skill_name):
         yang_count = sum(1 for k in last_10 if k["direction"] == "阳")
         yin_count = 10 - yang_count
 
-        if yang_count >= 7: bias = "近期明显偏多，阳线占主导"
-        elif yin_count >= 7: bias = "近期明显偏空，阴线占主导"
-        elif yang_count >= 6: bias = "近期略偏多"
-        elif yin_count >= 6: bias = "近期略偏空"
-        else: bias = "近期多空平衡，无明显偏向"
+        if yang_count >= 7:
+            bias = "近期明显偏多，阳线占主导"
+        elif yin_count >= 7:
+            bias = "近期明显偏空，阴线占主导"
+        elif yang_count >= 6:
+            bias = "近期略偏多"
+        elif yin_count >= 6:
+            bias = "近期略偏空"
+        else:
+            bias = "近期多空平衡，无明显偏向"
         lines.append(f"  * {bias}（最近10根中{yang_count}阳{yin_count}阴）")
 
         tc = all_bars[-1]["c"] - all_bars[0]["c"]
-        if tc > 0: lines.append(f"  * 整体向上，累计上涨{tc:.1f}")
-        elif tc < 0: lines.append(f"  * 整体向下，累计下跌{abs(tc):.1f}")
-        else: lines.append("  * 整体持平")
+        if tc > 0:
+            lines.append(f"  * 整体向上，累计上涨{tc:.1f}")
+        elif tc < 0:
+            lines.append(f"  * 整体向下，累计下跌{abs(tc):.1f}")
+        else:
+            lines.append("  * 整体持平")
         lines.append(f"  * 最近10根平均波幅{sum(k['total_range'] for k in last_10) / 10:.1f}")
 
         cons, max_c = 1, 1
         for i in range(1, len(last_10)):
-            cons = cons + 1 if last_10[i]["direction"] == last_10[i-1]["direction"] else 1
-            max_c = max(max_c, cons)
+            if last_10[i]["direction"] == last_10[i-1]["direction"]:
+                cons += 1
+                max_c = max(max_c, cons)
+            else:
+                cons = 1
         if max_c >= 4:
             lines.append(f"  * 出现连续{max_c}根{last_10[-1]['direction']}线，趋势有延续性")
 
@@ -267,24 +292,36 @@ def _market_msg(chart_df, bar, skill_name):
     return result
 
 # ============================================================
-# GPT 调用
+# GPT 调用（DeepSeek API）
 # ============================================================
 def _gpt(messages):
-    try:
-        client = OpenAI(
-            base_url="https://api.deepseek.com/v1",
-            api_key=st.secrets.get("OPENAI_API_KEY", ""),
-        )
-    except Exception:
-        client = OpenAI(
-            base_url="https://api.deepseek.com/v1",
-            api_key="",
-        )
-    resp = client.chat.completions.create(
-        model="gpt-5.5", messages=messages,
-        temperature=0.2, max_tokens=700,
+    # 从 Streamlit Secrets 读取 DeepSeek API Key
+    api_key = st.secrets["OPENAI_API_KEY"]
+    
+    client = OpenAI(
+        base_url="https://api.deepseek.com/v1",
+        api_key=api_key,
     )
-    return resp.choices[0].message.content
+    
+    for attempt in range(3):
+        try:
+            resp = client.chat.completions.create(
+                model="deepseek-chat",
+                messages=messages,
+                temperature=0.3,
+                max_tokens=800,
+            )
+            content = resp.choices[0].message.content.strip()
+            # 清理可能的markdown代码块标记
+            content = re.sub(r'^```json\s*', '', content)
+            content = re.sub(r'^```\s*', '', content)
+            content = re.sub(r'\s*```$', '', content)
+            return content
+        except Exception as e:
+            if attempt < 2 and "429" in str(e):
+                time.sleep(2 ** (attempt + 1))
+                continue
+            return f"AI调用失败: {e}"
 
 
 def ask_coach(chart_df, bar, skill_name, skill_question, dialogue, level=1, is_second_round=False):
@@ -343,7 +380,8 @@ def _fetch_all_contracts():
         for future in as_completed(futures):
             for c in future.result():
                 c = c.strip()
-                if len(c) < 3: continue
+                if len(c) < 3:
+                    continue
                 code = "".join(ch for ch in c[:4] if ch.isalpha()).upper()
                 if code in SYMBOL_NAMES and code not in mc:
                     mc[code] = c
@@ -357,23 +395,56 @@ def _load_all_main_contracts(mc):
 
 def _do_load(sym_code, sym_main):
     with st.spinner("加载中..."):
-        seed = random.randint(0, 999999)
-        df = load_data(sym_main, seed=seed)
-        if df is not None:
-            st.session_state["chart_df"] = df
-            st.session_state["current_bar"] = 40
-            st.session_state["coach_dialogue"] = []
-            st.session_state["observations"] = []
-            st.session_state["training_summary"] = ""
-            st.session_state["skill_round"] = 0
-            st.session_state["send_counter"] = 0
-            st.session_state["_mm_cache"] = {}
-            st.session_state["symbol_code"] = sym_code
-            st.session_state["symbol_main"] = sym_main
-            st.session_state["symbol_name"] = SYMBOL_NAMES.get(sym_code, sym_code)
-            st.success(f"已加载 {SYMBOL_NAMES.get(sym_code, sym_code)} ({sym_main})")
-            time.sleep(0.5)
-            st.rerun()
+        try:
+            seed = random.randint(0, 999999)
+            df = load_data(sym_main, seed=seed)
+            if df is not None and len(df) > 0:
+                st.session_state["chart_df"] = df
+                st.session_state["current_bar"] = min(40, len(df) - 1)
+                st.session_state["coach_dialogue"] = []
+                st.session_state["observations"] = []
+                st.session_state["training_summary"] = ""
+                st.session_state["skill_round"] = 0
+                st.session_state["send_counter"] = 0
+                st.session_state["_mm_cache"] = {}
+                st.session_state["symbol_code"] = sym_code
+                st.session_state["symbol_main"] = sym_main
+                st.session_state["symbol_name"] = SYMBOL_NAMES.get(sym_code, sym_code)
+                st.success(f"已加载 {SYMBOL_NAMES.get(sym_code, sym_code)} ({sym_main})")
+                time.sleep(0.5)
+                st.rerun()
+            else:
+                st.error(f"加载失败：{sym_main} 无数据")
+        except Exception as e:
+            st.error(f"加载出错: {str(e)}")
+
+# ============================================================
+# 发送观察
+# ============================================================
+def _send(text, chart_df, bar, skill):
+    s = st.session_state
+    dlg = s["coach_dialogue"]
+    dlg.append({"role": "user", "content": text})
+    s["observations"].append({
+        "skill_id": s.get("train_mode", 1), "bar": bar,
+        "text": text, "timestamp": datetime.now().strftime("%H:%M:%S"),
+    })
+
+    with st.spinner("教练思考中..."):
+        resp = ask_coach(
+            chart_df, bar, skill["name"], skill["question"], dlg,
+            level=s.get("train_level", 1),
+            is_second_round=(s["skill_round"] >= 1),
+        )
+
+    s["skill_round"] += 1
+    if s["skill_round"] >= 2:
+        resp += "\n\n---\n本项技能训练结束，可切换下一项继续。"
+
+    dlg.append({"role": "assistant", "content": resp})
+    s["coach_dialogue"] = dlg
+    s["send_counter"] = s.get("send_counter", 0) + 1
+    st.rerun()
 
 # ============================================================
 # 主界面
@@ -393,15 +464,17 @@ def main():
     </style>
     """, unsafe_allow_html=True)
 
-    # 初始化
-    for k, v in {
+    # 初始化 session_state
+    defaults = {
         "chart_df": None, "current_bar": 40,
         "coach_dialogue": [], "send_counter": 0,
         "training_summary": "", "skill_round": 0,
-        "train_level": 1, "observations": [],
+        "train_level": 1, "train_mode": 1,
+        "observations": [],
         "symbol_code": "", "symbol_main": "", "symbol_name": "",
         "_mm_cache": {},
-    }.items():
+    }
+    for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
 
@@ -475,6 +548,8 @@ def main():
 
     # 技能按钮 - 分两行显示
     current_skill_id = st.session_state.get("train_mode", 1)
+    
+    # 第一行：技能1-3
     cols1 = st.columns(3)
     for idx, sk in enumerate(SKILLS[:3]):
         is_active = (sk["id"] == current_skill_id)
@@ -490,6 +565,7 @@ def main():
             st.session_state["send_counter"] = 0
             st.rerun()
 
+    # 第二行：技能4-5
     cols2 = st.columns(3)
     for idx, sk in enumerate(SKILLS[3:]):
         is_active = (sk["id"] == current_skill_id)
@@ -534,32 +610,6 @@ def main():
 
     if prompt:
         _send(prompt, df, bar, active_skill)
-
-
-def _send(text, chart_df, bar, skill):
-    s = st.session_state
-    dlg = s["coach_dialogue"]
-    dlg.append({"role": "user", "content": text})
-    s["observations"].append({
-        "skill_id": s.get("train_mode", 1), "bar": bar,
-        "text": text, "timestamp": datetime.now().strftime("%H:%M:%S"),
-    })
-
-    with st.spinner("教练思考中..."):
-        resp = ask_coach(
-            chart_df, bar, skill["name"], skill["question"], dlg,
-            level=s.get("train_level", 1),
-            is_second_round=(s["skill_round"] >= 1),
-        )
-
-    s["skill_round"] += 1
-    if s["skill_round"] >= 2:
-        resp += "\n\n---\n本项技能训练结束，可切换下一项继续。"
-
-    dlg.append({"role": "assistant", "content": resp})
-    s["coach_dialogue"] = dlg
-    s["send_counter"] = s.get("send_counter", 0) + 1
-    st.rerun()
 
 
 if __name__ == "__main__":
