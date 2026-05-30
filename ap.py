@@ -286,16 +286,22 @@ def ask_coach(
 
 
 # ── 数据获取（改动3：加缓存；改动4：并发加载）────────────
-@st.cache_data(ttl=86400, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def _fetch_raw(symbol: str):
-    """获取原始K线数据，缓存24小时"""
-    try:
-        df = ak.futures_zh_minute_sina(symbol=symbol, period="60")
-    except Exception as e:
-        return None, str(e)
-    if df is None or df.empty:
-        return None, f"{symbol} 返回数据为空"
-    return df, None
+    """获取原始K线数据，缓存1小时，失败自动重试3次"""
+    last_err = ""
+    for attempt in range(3):
+        try:
+            df = ak.futures_zh_minute_sina(symbol=symbol, period="60")
+            if df is not None and not df.empty:
+                return df, None
+            last_err = f"{symbol} 返回数据为空"
+        except Exception as e:
+            last_err = str(e)
+            if attempt < 2:
+                time.sleep(2 ** (attempt + 1))
+                continue
+    return None, last_err
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -499,7 +505,7 @@ if not st.session_state.data_loaded:
             st.session_state.data_loaded         = True
             st.session_state.data_error          = None
         else:
-            st.session_state.data_error = "数据加载失败，请检查网络或合约代码"
+            st.session_state.data_error = f"⚠️ {st.session_state.current_symbol} 数据加载失败，已自动重试3次。可能原因：1.新浪接口临时限流，稍等后重试；2.合约代码不存在"
 
 # ── 图表区 ───────────────────────────────────────────────
 if st.session_state.data_loaded and st.session_state.kline_data is not None:
