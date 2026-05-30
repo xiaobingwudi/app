@@ -1,7 +1,6 @@
 """
-Al Brooks 结构训练器 V22
-关键改动：5个技能按钮移到侧栏（st.radio 垂直排列），永远可见、不被图表遮挡
-主区域：只放 图表 + 对话区
+Al Brooks 结构训练器 V21
+修复关键：改用 st.selectbox 下拉框选择技能 → 永远不换行、不被图表遮挡
 """
 import json, time, random
 from datetime import datetime, date
@@ -17,16 +16,7 @@ import akshare as ak
 # ── 页面配置 ──────────────────────────────────────────────
 st.set_page_config(page_title="Al Brooks 结构训练器", layout="wide")
 
-# ── 5个技能定义 ─────────────────────────────────────────
-SKILLS = [
-    {"id": 1, "name": "背景阅读",   "question": "当前市场背景是什么？"},
-    {"id": 2, "name": "控制权识别", "question": "现在谁在控制市场？"},
-    {"id": 3, "name": "推进质量",   "question": "最近推进的质量如何？"},
-    {"id": 4, "name": "回调vs转换", "question": "这是正常回调还是控制权转换？"},
-    {"id": 5, "name": "市场接受",   "question": "市场是否接受了新价格？"},
-]
-
-# ── 侧栏 ────────────────────────────────────────────────
+# ── 侧栏 ├────────────────────────────────────────────
 with st.sidebar:
     st.markdown("**训练阶段**")
     TRAIN_LEVEL_OPTIONS = {
@@ -61,20 +51,20 @@ with st.sidebar:
     level_name = level_info["name"]
     level_desc = level_info["desc"]
 
-    st.markdown("---")
+    st.caption(f"数据: ? 根K线 | Bar: {n_bars}")
 
-    # ── 技能选择（侧栏，垂直 radio，永远可见） ──
-    st.markdown("**选择技能目的**")
-    skill_labels = [f"{s['name']}" for s in SKILLS]
-    selected_skill_name = st.radio(
-        "",
-        skill_labels,
-        index=None,
-        label_visibility="collapsed",
-    )
-
-    st.markdown("---")
-    data_display = st.empty()  # 用于更新数据信息
+# ── 5个技能定义 ─────────────────────────────────────────
+SKILLS = [
+    {"id": 1, "name": "背景阅读",   "question": "当前市场背景是什么？"},
+    {"id": 2, "name": "控制权识别", "question": "现在谁在控制市场？"},
+    {"id": 3, "name": "推进质量",   "question": "最近推进的质量如何？"},
+    {"id": 4, "name": "回调vs转换", "question": "这是正常回调还是控制权转换？"},
+    {"id": 5, "name": "市场接受",   "question": "市场是否接受了新价格？"},
+]
+# 下拉选项： "1. 背景阅读 — 当前市场背景是什么？" 这样的格式
+SKILL_OPTIONS = [
+    f"{s['id']}. {s['name']} — {s['question']}" for s in SKILLS
+]
 
 # ── AI Prompt 模板 ──────────────────────────────────────
 AI_SYSTEM_PROMPT_TEMPLATE = """你是一个Al Brooks价格行为交易教练，当前训练阶段为「{level_name}」：{level_desc}
@@ -122,6 +112,7 @@ def _market_msg(kline_df: pd.DataFrame) -> str:
         f"近10根K线范围: {total_range:.2f}%，5期ATR: {atr:.1f}",
     ]
 
+    # 趋势判断
     ma5 = c.rolling(5).mean()
     if all(c.iloc[-i] > ma5.iloc[-i] for i in range(1, 4)):
         lines.append("短期趋势: 多头排列")
@@ -130,6 +121,7 @@ def _market_msg(kline_df: pd.DataFrame) -> str:
     else:
         lines.append("短期趋势: 震荡")
 
+    # 连续同向
     cons_up = 0
     cons_dn = 0
     for i in range(len(c) - 1, 0, -1):
@@ -169,6 +161,7 @@ def ask_coach(
         level_desc=level_desc,
     )
 
+    # 最近10轮对话作为上下文
     recent_msgs = []
     if "chat_history" in st.session_state:
         for m in st.session_state.chat_history[-10:]:
@@ -243,21 +236,26 @@ def calc_structural_features(kline_df: pd.DataFrame) -> dict:
     n = len(kline_df)
     features = {}
 
+    # 1. 趋势方向
     ma20 = pd.Series(c).rolling(20).mean().values
     slope = (ma20[-1] - ma20[-5]) / 5 if not np.isnan(ma20[-1]) and not np.isnan(ma20[-5]) else 0
     features["trend"] = "up" if slope > 0 else "down" if slope < 0 else "flat"
 
+    # 2. 波动率
     features["volatility"] = float(np.std((h - l) / (l + 1e-10)))
 
+    # 3. 最近N根的趋势强度（连续同向K线占比）
     lookback = min(20, n)
     up_count = sum(1 for i in range(n - lookback, n) if c[i] > c[i - 1])
     features["up_ratio"] = up_count / lookback
 
+    # 4. 突破K线
     recent_high = max(h[n - 21 : n - 1]) if n >= 21 else max(h[: n - 1])
     recent_low = min(l[n - 21 : n - 1]) if n >= 21 else min(l[: n - 1])
     features["breakout_up"] = bool(c[-1] > recent_high and h[-1] > recent_high)
     features["breakout_dn"] = bool(c[-1] < recent_low and l[-1] < recent_low)
 
+    # 5. 回调深度
     if n >= 10:
         seg_high = max(h[-10:])
         seg_low = min(l[-10:])
@@ -285,6 +283,7 @@ def plot_kline(kline_df: pd.DataFrame, features: dict):
         row_heights=[0.75, 0.25],
     )
 
+    # K线
     fig.add_trace(
         go.Candlestick(
             x=df["date"], open=df["Open"], high=df["High"],
@@ -296,12 +295,14 @@ def plot_kline(kline_df: pd.DataFrame, features: dict):
         row=1, col=1,
     )
 
+    # 成交量
     colors = ["#ef5350" if row["Close"] >= row["Open"] else "#26a69a" for _, row in df.iterrows()]
     fig.add_trace(
         go.Bar(x=df["date"], y=df["Volume"], name="成交量", marker_color=colors),
         row=2, col=1,
     )
 
+    # K线编号
     for i, (_, row) in enumerate(df.iterrows()):
         label = str(len(df) - i)
         fig.add_annotation(
@@ -311,6 +312,7 @@ def plot_kline(kline_df: pd.DataFrame, features: dict):
             row=1, col=1,
         )
 
+    # 结构标注
     if features:
         last_c = df["Close"].iloc[-1]
         if features.get("breakout_up"):
@@ -341,30 +343,44 @@ for key, default in [
     ("kline_data", None),
     ("main_contract", None),
     ("structural_features", {}),
-    ("prev_skill_name", None),
+    ("prev_skill_option", None),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
 
 # ═══════════════════════════════════════════════════════════
-#  主界面：只有 图表 + 对话
-#  技能选择在侧栏
+#  主界面
 # ═══════════════════════════════════════════════════════════
 
-# ── 侧栏技能选择处理 ────────────────────────────────
-if selected_skill_name is not None and selected_skill_name != st.session_state.prev_skill_name:
-    skill_obj = next(s for s in SKILLS if s["name"] == selected_skill_name)
+# ── 区块1: 技能选择（下拉框，永不换行） ────────────
+st.markdown("### 选择技能目的")
+selected_option = st.selectbox(
+    "", SKILL_OPTIONS, index=None,
+    placeholder="点击选择技能...",
+    label_visibility="collapsed",
+)
 
-    if st.session_state.prev_skill_name == selected_skill_name:
-        st.session_state.skill_round = 2
+# 检测技能切换
+if selected_option is not None and selected_option != st.session_state.prev_skill_option:
+    # 解析选中的技能
+    skill_id = int(selected_option.split(".")[0])
+    skill_obj = next(s for s in SKILLS if s["id"] == skill_id)
+
+    if st.session_state.prev_skill_option is not None:
+        prev_id = int(st.session_state.prev_skill_option.split(".")[0])
+        if prev_id == skill_id:
+            # 同一技能 → 第2轮
+            st.session_state.skill_round = 2
+        else:
+            st.session_state.current_skill = skill_obj
+            st.session_state.last_skill_id = skill_id
+            st.session_state.skill_round = 1
     else:
         st.session_state.current_skill = skill_obj
-        st.session_state.last_skill_id = skill_obj["id"]
+        st.session_state.last_skill_id = skill_id
         st.session_state.skill_round = 1
-        # 新技能 → 清空对话历史
-        st.session_state.chat_history = []
 
-    st.session_state.prev_skill_name = selected_skill_name
+    st.session_state.prev_skill_option = selected_option
 
 # 显示当前技能状态
 if st.session_state.current_skill:
@@ -375,7 +391,10 @@ if st.session_state.current_skill:
         f"阶段: {level_name} | {round_label}"
     )
 
-# ── 数据加载 ────────────────────────────────────────
+# 分隔线
+st.markdown("---")
+
+# ── 区块2: 图表区 ────────────────────────────────────
 if not st.session_state.data_loaded:
     with st.spinner("加载数据..."):
         df, main_code = load_data()
@@ -385,7 +404,6 @@ if not st.session_state.data_loaded:
             st.session_state.structural_features = calc_structural_features(df)
             st.session_state.data_loaded = True
 
-# ── 图表区 ──────────────────────────────────────────
 if st.session_state.data_loaded and st.session_state.kline_data is not None:
     fig = plot_kline(st.session_state.kline_data, st.session_state.structural_features)
     st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True})
@@ -394,14 +412,16 @@ else:
 
 # 更新侧栏数据信息
 if st.session_state.data_loaded and st.session_state.kline_data is not None:
-    data_display.caption(f"数据: {len(st.session_state.kline_data)} 根K线 | Bar: {n_bars}")
+    st.sidebar.caption(
+        f"数据: {len(st.session_state.kline_data)} 根K线 | Bar: {n_bars}"
+    )
 
-# ── 分隔线 ──────────────────────────────────────────
+# 分隔线
 st.markdown("---")
 
-# ── 对话区 ──────────────────────────────────────────
+# ── 区块3: 对话区 ────────────────────────────────────
 if st.session_state.current_skill is None:
-    st.info("👈 从左侧侧栏选择技能目的开始训练")
+    st.info("👆 从上方下拉框选择技能目的开始训练")
 else:
     skill = st.session_state.current_skill
     is_round2 = st.session_state.skill_round == 2
@@ -450,6 +470,7 @@ else:
             st.markdown(reply)
         st.session_state.chat_history.append({"role": "assistant", "content": reply})
 
+        # 第2轮结束后重置回第1轮
         if is_round2:
             st.session_state.skill_round = 1
 
