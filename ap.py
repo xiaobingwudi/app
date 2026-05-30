@@ -415,17 +415,87 @@ def build_chart(chart_df, bar, swings):
 # GPT
 # =========================================================
 def _market_msg(chart_df, bar, skill_name):
-    start = max(0, bar - 60)
+    """
+    给AI提供增强的K线数据
+    只添加真正有用的特征，不做过度处理
+    """
+    # 取最近40根K线（您确认过的合适数量）
+    start = max(0, bar - 40)
+    
     recent = []
-    for i in range(start, bar+1):
-        r = chart_df.iloc[i]
-        recent.append({"bar":i,"open":round(float(r["open"]),1),
-                       "high":round(float(r["high"]),1),
-                       "low":round(float(r["low"]),1),
-                       "close":round(float(r["close"]),1)})
-    return json.dumps({"current_bar":bar,
-                        "skill":skill_name,"market":recent}, ensure_ascii=False)
-
+    for i in range(start, bar + 1):
+        row = chart_df.iloc[i]
+        
+        # 原始数据
+        o = float(row["open"])
+        h = float(row["high"])
+        l = float(row["low"])
+        c = float(row["close"])
+        
+        # === 计算有用特征 ===
+        
+        # 1. 实体大小 (绝对值)
+        body = abs(c - o)
+        
+        # 2. 整体波幅
+        total_range = h - l
+        
+        # 3. 实体占比 (判断K线强弱)
+        #    0.8以上 = 实体很大，影线很短 -> 强趋势K线
+        #    0.3以下 = 实体很小，影线很长 -> 犹豫/反转K线
+        body_ratio = body / total_range if total_range > 0 else 0
+        
+        # 4. 上影线占比 (判断上方压力)
+        if c >= o:  # 阳线
+            upper_wick = h - c
+        else:       # 阴线
+            upper_wick = h - o
+        upper_ratio = upper_wick / total_range if total_range > 0 else 0
+        
+        # 5. 下影线占比 (判断下方支撑)
+        if c >= o:  # 阳线
+            lower_wick = o - l
+        else:       # 阴线
+            lower_wick = c - l
+        lower_ratio = lower_wick / total_range if total_range > 0 else 0
+        
+        # 6. 相对于前一根收盘价的变化 (判断动量)
+        if i > 0:
+            prev_c = float(chart_df.iloc[i-1]["close"])
+            price_change = c - prev_c
+        else:
+            price_change = 0
+        
+        recent.append({
+            "bar": i,
+            "open": round(o, 1),
+            "high": round(h, 1),
+            "low": round(l, 1),
+            "close": round(c, 1),
+            "body_ratio": round(body_ratio, 2),      # 新增：实体占比
+            "upper_wick": round(upper_ratio, 2),     # 新增：上影线占比
+            "lower_wick": round(lower_ratio, 2),     # 新增：下影线占比
+            "change": round(price_change, 1)         # 新增：相对变化
+        })
+    
+    # 额外添加一个简单的整体统计
+    closes = [r["close"] for r in recent]
+    
+    market_msg = {
+        "current_bar": bar,
+        "skill": skill_name,
+        "bars": recent,
+        "summary": {
+            "high_40": max([r["high"] for r in recent]),      # 40根最高点
+            "low_40": min([r["low"] for r in recent]),        # 40根最低点
+            "start_price": recent[0]["close"],                # 起始价格
+            "end_price": recent[-1]["close"],                 # 当前价格
+            "net_change": round(recent[-1]["close"] - recent[0]["close"], 1)  # 整体涨跌
+        }
+    }
+    
+    return json.dumps(market_msg, ensure_ascii=False)
+    
 def _gpt(messages):
     api_key = st.secrets["OPENAI_API_KEY"]
     client = OpenAI(api_key=api_key, base_url="https://api.videocaptioner.cn/v1")
