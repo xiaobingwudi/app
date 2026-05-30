@@ -200,9 +200,9 @@ def _market_msg(chart_df, bar, skill_name):
 
 def _gpt(messages):
     try:
-        client = OpenAI(base_url="https://www.right.codes/codex/v1", api_key=st.secrets.get("OPENAI_API_KEY", ""))
+        client = OpenAI(base_url="https://api.deepseek.com/beta", api_key=st.secrets.get("OPENAI_API_KEY", ""))
     except Exception:
-        client = OpenAI(base_url="https://www.right.codes/codex/v1", api_key="")
+        client = OpenAI(base_url="https://api.deepseek.com/beta", api_key="")
     resp = client.chat.completions.create(model="gpt-5.5", messages=messages, temperature=0.2, max_tokens=700)
     return resp.choices[0].message.content
 
