@@ -1,5 +1,8 @@
 """
-Al Brooks 结构训练器 V18
+Al Brooks 结构训练器 V19
+基于 V18 仅修改两处：
+1. 数据加载：match_main_contract → {CODE}0 连续合约格式
+2. 交互：chart_df固定 + 每技能最多2轮 + 图表只在换图时移动
 """
 import streamlit as st
 import pandas as pd
@@ -477,15 +480,13 @@ def main():
             "农产品": ["A","B","M","Y","P","C","CS","JD","CF","SR","RM","OI","FG","AP","CJ","PK","LH"],
             "能源": ["SC","FU","BU","LU","NR","RU"],
         }
-        mc = {}
-        _load_all_main_contracts(mc)
+        # 修改1: 不再依赖 match_main_contract，直接使用 {CODE}0 连续合约格式
         for cat, codes in exchanges.items():
             with st.expander(cat, expanded=(cat == "金融")):
                 cols = st.columns(4)
                 for idx, code in enumerate(codes):
-                    if code in mc:
-                        if cols[idx % 4].button(code, key=f"sym_{code}", use_container_width=True):
-                            _do_load(code, mc[code], period=selected_period)
+                    if cols[idx % 4].button(code, key=f"sym_{code}", use_container_width=True):
+                        _do_load(code, f"{code}0", period=selected_period)
 
         if st.session_state.get("chart_df") is not None:
             df = st.session_state["chart_df"]
@@ -495,13 +496,15 @@ def main():
                     new_bar = _random_bar(df)
                     st.session_state["current_bar"] = new_bar
                     st.session_state["_mm_cache"] = {}
+                    # 随机跳转时重置技能状态
+                    st.session_state["skill_round"] = 0
+                    st.session_state["coach_dialogue"] = []
                     st.rerun()
             with col_b:
                 sym_code = st.session_state.get("symbol_code", "")
-                sym_main = st.session_state.get("symbol_main", "")
-                if sym_code and sym_main:
+                if sym_code:
                     if st.button("🔄 重载", use_container_width=True):
-                        _do_load(sym_code, sym_main, period=selected_period)
+                        _do_load(sym_code, f"{sym_code}0", period=selected_period)
 
         level = st.selectbox(
             "阶段", options=[1, 2, 3],
@@ -575,6 +578,7 @@ def main():
                 st.markdown(m["content"])
 
         s = st.session_state
+        # 修改2: 每技能最多2轮，图表固定不随AI点评变化
         can_input = s.get("skill_round", 0) < 2 and s.get("chart_df") is not None
         if can_input:
             prompt = st.chat_input("分享你对当前行情的观察...")
