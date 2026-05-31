@@ -163,13 +163,13 @@ def build_chart(chart_df, bar):
     ), row=1, col=1)
     colors = ["red" if c >= o else "cyan" for o, c in zip(df["open"], df["close"])]
     fig.add_trace(go.Bar(x=df.index, y=df["volume"], marker_color=colors, showlegend=False, opacity=0.5), row=2, col=1)
+    # 每根K线都显示编号
     for idx in range(len(df)):
-        if idx % 5 == 0:
-            row = df.iloc[idx]
-            ny = row["low"] if row["close"] >= row["open"] else row["high"]
-            fig.add_annotation(x=idx, y=ny, text=str(df.index[idx] + start),
-                               showarrow=False, font=dict(size=9, color="gray"),
-                               yshift=-10 if row["close"] >= row["open"] else 10)
+        row = df.iloc[idx]
+        ny = row["low"] if row["close"] >= row["open"] else row["high"]
+        fig.add_annotation(x=idx, y=ny, text=str(df.index[idx] + start),
+                           showarrow=False, font=dict(size=7, color="#888888"),
+                           yshift=-10 if row["close"] >= row["open"] else 10)
     fig.add_vline(x=bar-start, line_dash="dash", line_color="orange", line_width=1, opacity=0.6)
     fig.update_layout(xaxis_rangeslider_visible=False, height=600,
                       margin=dict(l=10, r=10, t=5, b=5),
@@ -384,26 +384,21 @@ def _do_load(sym_code, sym_main, period="30"):
 def main():
     st.set_page_config(page_title="Al Brooks 结构训练器", layout="wide")
 
-    # 自定义CSS：缩小侧边栏、缩小所有边距
     st.markdown("""
     <style>
-        /* 缩小侧边栏宽度 */
         section[data-testid="stSidebar"] {
             width: 280px !important;
             min-width: 240px !important;
             max-width: 320px !important;
         }
-        /* 缩小侧边栏内部 padding */
         section[data-testid="stSidebar"] .block-container {
             padding-top: 1rem !important;
             padding-left: 0.8rem !important;
             padding-right: 0.8rem !important;
         }
-        /* 缩小所有 stMarkdown 和 stCaption 的上下边距 */
         .stMarkdown, .stCaption {
             margin-bottom: 0.2rem !important;
         }
-        /* 缩小 stExpander 的边距 */
         div[data-testid="stExpander"] {
             margin-bottom: 0.2rem !important;
         }
@@ -417,35 +412,29 @@ def main():
         div[data-testid="stExpander"] div[data-testid="element-container"] {
             padding: 0 !important;
         }
-        /* 缩小按钮 */
         .stButton button {
             font-size: 0.75rem !important;
             padding: 0.15rem 0.3rem !important;
             min-height: 0 !important;
             line-height: 1.4 !important;
         }
-        /* 缩小选择框 */
         div[data-testid="stSelectbox"] {
             margin-bottom: 0.2rem !important;
         }
         div[data-testid="stSelectbox"] > div {
             min-height: 1.8rem !important;
         }
-        /* 缩小 stDivider */
         hr {
             margin: 0.4rem 0 !important;
         }
-        /* 缩小 stInfo */
         div[data-testid="stInfo"] {
             padding: 0.3rem !important;
             font-size: 0.8rem !important;
         }
-        /* 缩小成功消息 */
         div[data-testid="stSuccess"] {
             padding: 0.3rem !important;
             font-size: 0.8rem !important;
         }
-        /* 缩小 caption */
         .stCaption {
             font-size: 0.75rem !important;
         }
@@ -462,7 +451,6 @@ def main():
             st.session_state[k] = v
 
     with st.sidebar:
-        # ---- 标题 + 数据源（一行紧凑） ----
         st.markdown("**品种选择**")
         period_map = {"15分钟": "15", "30分钟": "30", "60分钟": "60", "日线": "day"}
         period_label = st.selectbox(
@@ -471,7 +459,6 @@ def main():
         )
         selected_period = period_map[period_label]
 
-        # ---- 数据源信息折叠 ----
         with st.expander("数据源信息", expanded=False):
             st.caption(
                 f"来源: 新浪财经(akshare)<br>"
@@ -482,7 +469,6 @@ def main():
                 df = st.session_state["chart_df"]
                 st.caption(f"K线数: {len(df)}根")
 
-        # ---- 品种分类 ----
         exchanges = {
             "金融": ["IF","IH","IC","IM","TS","TF","T","TL"],
             "有色": ["CU","AL","ZN","PB","NI","SN","AU","AG","BC"],
@@ -493,7 +479,6 @@ def main():
         }
         mc = {}
         _load_all_main_contracts(mc)
-        # 默认全部收起，只有金融展开
         for cat, codes in exchanges.items():
             with st.expander(cat, expanded=(cat == "金融")):
                 cols = st.columns(4)
@@ -502,7 +487,6 @@ def main():
                         if cols[idx % 4].button(code, key=f"sym_{code}", use_container_width=True):
                             _do_load(code, mc[code], period=selected_period)
 
-        # ---- 操作按钮行 ----
         if st.session_state.get("chart_df") is not None:
             df = st.session_state["chart_df"]
             col_a, col_b = st.columns(2)
@@ -519,7 +503,6 @@ def main():
                     if st.button("🔄 重载", use_container_width=True):
                         _do_load(sym_code, sym_main, period=selected_period)
 
-        # ---- 训练阶段 ----
         level = st.selectbox(
             "阶段", options=[1, 2, 3],
             format_func=lambda x: f"阶段{x}: {TRAIN_LEVEL[x]['name']}",
@@ -528,7 +511,6 @@ def main():
         )
         st.session_state["train_level"] = level
 
-        # ---- 当前状态 ----
         st.caption(f"当前: {st.session_state.get('symbol_name','-')} | K{st.session_state.get('current_bar','-')}")
         if st.session_state.get("chart_df") is not None:
             df = st.session_state["chart_df"]
@@ -536,7 +518,6 @@ def main():
                            key="bar_slider", label_visibility="collapsed")
             st.session_state["current_bar"] = bar
 
-        # ---- 阅读画像 ----
         rp = st.session_state.get("reading_profile", {})
         if rp:
             st.markdown("**阅读画像**")
