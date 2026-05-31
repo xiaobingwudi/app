@@ -397,69 +397,42 @@ def next_bar_callback():
 
 def main():
     st.set_page_config(page_title="Al Brooks 结构训练器", layout="wide")
-
     st.markdown("""
     <style>
-        section[data-testid="stSidebar"] {
-            width: 280px !important;
-            min-width: 240px !important;
-            max-width: 320px !important;
-        }
-        section[data-testid="stSidebar"] .block-container {
-            padding-top: 1rem !important;
-            padding-left: 0.8rem !important;
-            padding-right: 0.8rem !important;
-        }
-        .stMarkdown, .stCaption {
-            margin-bottom: 0.2rem !important;
-        }
-        div[data-testid="stExpander"] {
-            margin-bottom: 0.2rem !important;
-        }
-        div[data-testid="stExpander"] details {
-            border: none !important;
-        }
-        div[data-testid="stExpander"] summary {
-            padding: 0.2rem 0.5rem !important;
-            font-size: 0.85rem !important;
-        }
-        div[data-testid="stExpander"] div[data-testid="element-container"] {
-            padding: 0 !important;
-        }
-        .stButton button {
-            font-size: 0.75rem !important;
-            padding: 0.15rem 0.3rem !important;
-            min-height: 0 !important;
-            line-height: 1.4 !important;
-        }
-        div[data-testid="stSelectbox"] {
-            margin-bottom: 0.2rem !important;
-        }
-        div[data-testid="stSelectbox"] > div {
-            min-height: 1.8rem !important;
-        }
-        hr {
-            margin: 0.4rem 0 !important;
-        }
-        div[data-testid="stInfo"] {
-            padding: 0.3rem !important;
-            font-size: 0.8rem !important;
-        }
-        div[data-testid="stSuccess"] {
-            padding: 0.3rem !important;
-            font-size: 0.8rem !important;
-        }
-        .stCaption {
-            font-size: 0.75rem !important;
-        }
+     /* 保持原有的CSS样式不变 */
+     section[data-testid="stSidebar"] { width: 280px !important; min-width: 240px !important; max-width: 320px !important; }
+     section[data-testid="stSidebar"] .block-container { padding-top: 1rem !important; padding-left: 0.8rem !important; padding-right: 0.8rem !important; }
+     .stMarkdown, .stCaption { margin-bottom: 0.2rem !important; }
+     div[data-testid="stExpander"] { margin-bottom: 0.2rem !important; }
+     div[data-testid="stExpander"] details { border: none !important; }
+     div[data-testid="stExpander"] summary { padding: 0.2rem 0.5rem !important; font-size: 0.85rem !important; }
+     div[data-testid="stExpander"] div[data-testid="element-container"] { padding: 0 !important; }
+     .stButton button { font-size: 0.75rem !important; padding: 0.15rem 0.3rem !important; min-height: 0 !important; line-height: 1.4 !important; }
+     div[data-testid="stSelectbox"] { margin-bottom: 0.2rem !important; }
+     div[data-testid="stSelectbox"] > div { min-height: 1.8rem !important; }
+     hr { margin: 0.4rem 0 !important; }
+     div[data-testid="stInfo"] { padding: 0.3rem !important; font-size: 0.8rem !important; }
+     div[data-testid="stSuccess"] { padding: 0.3rem !important; font-size: 0.8rem !important; }
+     .stCaption { font-size: 0.75rem !important; }
     </style>
     """, unsafe_allow_html=True)
 
+    # 初始化 session_state 变量
     for k, v in {
-        "chart_df": None, "current_bar": 40, "coach_dialogue": [], "send_counter": 0,
-        "training_summary": "", "skill_round": 0, "train_level": 1, "observations": [],
-        "symbol_code": "", "symbol_main": "", "symbol_name": "", "_mm_cache": {},
-        "reading_profile": {}, "data_period": "30",
+        "chart_df": None,
+        "current_bar": 40,
+        "coach_dialogue": [],
+        "send_counter": 0,
+        "training_summary": "",
+        "skill_round": 0,
+        "train_level": 1,
+        "observations": [],
+        "symbol_code": "",
+        "symbol_main": "",
+        "symbol_name": "",
+        "_mm_cache": {},
+        "reading_profile": {},
+        "data_period": "30",
     }.items():
         if k not in st.session_state:
             st.session_state[k] = v
@@ -468,8 +441,11 @@ def main():
         st.markdown("**品种选择**")
         period_map = {"15分钟": "15", "30分钟": "30", "60分钟": "60", "日线": "day"}
         period_label = st.selectbox(
-            "周期", options=list(period_map.keys()),
-            index=1, key="period_selector", label_visibility="collapsed"
+            "周期",
+            options=list(period_map.keys()),
+            index=1,
+            key="period_selector",
+            label_visibility="collapsed"
         )
         selected_period = period_map[period_label]
 
@@ -479,9 +455,10 @@ def main():
                 f"周期: {st.session_state['data_period']}分钟<br>"
                 f"合约: 主力连续"
             )
-            if st.session_state.get("chart_df") is not None:
-                df = st.session_state["chart_df"]
-                st.caption(f"K线数: {len(df)}根")
+
+        if st.session_state.get("chart_df") is not None:
+            df = st.session_state["chart_df"]
+            st.caption(f"K线数: {len(df)}根")
 
         exchanges = {
             "金融": ["IF","IH","IC","IM","TS","TF","T","TL"],
@@ -491,7 +468,8 @@ def main():
             "农产品": ["A","B","M","Y","P","C","CS","JD","CF","SR","RM","OI","FG","AP","CJ","PK","LH"],
             "能源": ["SC","FU","BU","LU","NR","RU"],
         }
-        # 修改1: 不再依赖 match_main_contract，直接使用 {CODE}0 连续合约格式
+        
+        # 修改1: 使用 {CODE}0 连续合约格式
         for cat, codes in exchanges.items():
             with st.expander(cat, expanded=(cat == "金融")):
                 cols = st.columns(4)
@@ -499,39 +477,63 @@ def main():
                     if cols[idx % 4].button(code, key=f"sym_{code}", use_container_width=True):
                         _do_load(code, f"{code}0", period=selected_period)
 
+        # --- 新增的按钮逻辑 ---
         if st.session_state.get("chart_df") is not None:
             df = st.session_state["chart_df"]
-            col_a, col_b = st.columns(2)
+            col_a, col_b, col_c = st.columns(3)  # 增加一列用于放置新按钮
+            
             with col_a:
                 if st.button("🎲 随机", use_container_width=True):
                     new_bar = _random_bar(df)
                     st.session_state["current_bar"] = new_bar
                     st.session_state["_mm_cache"] = {}
-                    # 随机跳转时重置技能状态
                     st.session_state["skill_round"] = 0
                     st.session_state["coach_dialogue"] = []
                     st.rerun()
+                    
             with col_b:
                 sym_code = st.session_state.get("symbol_code", "")
                 if sym_code:
                     if st.button("🔄 重载", use_container_width=True):
                         _do_load(sym_code, f"{sym_code}0", period=selected_period)
+            
+            # 新增的“下一根”按钮
+            with col_c:
+                if st.button("⏭️ 下一根", use_container_width=True):
+                    current = st.session_state["current_bar"]
+                    max_bar = len(df) - 1
+                    if current < max_bar:
+                        st.session_state["current_bar"] = current + 1
+                        st.session_state["_mm_cache"] = {} # 清除缓存以更新数据
+                        st.rerun()
+                    else:
+                        st.toast("已是最后一根K线", icon="ℹ️")
 
+        # 阶段选择
         level = st.selectbox(
-            "阶段", options=[1, 2, 3],
+            "阶段",
+            options=[1, 2, 3],
             format_func=lambda x: f"阶段{x}: {TRAIN_LEVEL[x]['name']}",
             index=st.session_state.get("train_level", 1) - 1,
-            key="train_level_sel", label_visibility="collapsed"
+            key="train_level_sel",
+            label_visibility="collapsed"
         )
         st.session_state["train_level"] = level
 
-        st.caption(f"当前: {st.session_state.get('symbol_name','-')} | K{st.session_state.get('current_bar','-')}")
+        # 显示当前状态
         if st.session_state.get("chart_df") is not None:
             df = st.session_state["chart_df"]
-            bar = st.slider("K线", 41, len(df) - 1, value=st.session_state["current_bar"],
-                           key="bar_slider", label_visibility="collapsed")
+            bar = st.slider(
+                "K线", 
+                41, 
+                len(df) - 1, 
+                value=st.session_state["current_bar"], 
+                key="bar_slider", 
+                label_visibility="collapsed"
+            )
             st.session_state["current_bar"] = bar
 
+        # 阅读画像
         rp = st.session_state.get("reading_profile", {})
         if rp:
             st.markdown("**阅读画像**")
@@ -547,30 +549,36 @@ def main():
                     f"font-size:9px;color:white;padding-right:3px;line-height:12px;'>{rp[key]}</div></div></div>",
                     unsafe_allow_html=True
                 )
-            if st.button("重置画像", use_container_width=True):
-                st.session_state["reading_profile"] = {}
-                st.rerun()
+        if st.button("重置画像", use_container_width=True):
+            st.session_state["reading_profile"] = {}
+            st.rerun()
 
+    # --- 主界面 ---
     df = st.session_state.get("chart_df")
     if df is None:
         st.info("请从左侧选择品种开始训练")
         return
-    bar = st.session_state["current_bar"]
 
+    bar = st.session_state["current_bar"]
+    
+    # 技能选择按钮
     with st.container():
         current_skill_id = st.session_state.get("train_mode", 1)
         cols = st.columns(5)
         for idx, sk in enumerate(SKILLS):
             is_active = (sk["id"] == current_skill_id)
             if cols[idx].button(
-                sk["name"], type="primary" if is_active else "secondary",
-                use_container_width=True, key=f"skill_{sk['id']}"
+                sk["name"], 
+                type="primary" if is_active else "secondary", 
+                use_container_width=True, 
+                key=f"skill_{sk['id']}"
             ):
                 st.session_state["train_mode"] = sk["id"]
                 st.session_state["coach_dialogue"] = []
                 st.session_state["skill_round"] = 0
                 st.session_state["send_counter"] = 0
                 st.rerun()
+        
         active_skill = next(sk for sk in SKILLS if sk["id"] == current_skill_id)
         st.caption(
             f"当前技能: {active_skill['name']} | "
@@ -578,16 +586,11 @@ def main():
             f"第{st.session_state['skill_round']+1}/2 轮"
         )
 
-    # 修改：图表和下一根按钮
-    st.plotly_chart(build_chart(df, bar), use_container_width=True, key=f"chart_{bar}")
-    
-    # 下一根按钮 - 使用回调函数
-    if st.button("▶ 下一根", key="next_bar_btn", on_click=next_bar_callback, use_container_width=True):
-        pass  # 回调函数已经处理了逻辑
-    
-    # 显示当前K线位置信息
-    st.caption(f"当前K线: {bar} / {len(df)-1}")
+    # 图表显示
+    with st.container():
+        st.plotly_chart(build_chart(df, bar), use_container_width=True)
 
+    # 对话界面
     with st.container():
         st.markdown("### 教练")
         for m in st.session_state["coach_dialogue"][-10:]:
@@ -597,16 +600,16 @@ def main():
 
         s = st.session_state
         # 修改2: 每技能最多2轮，图表固定不随AI点评变化
-        can_input = s.get("skill_round", 0) < 2 and s.get("chart_df") is not None
+        can_input = s.get("skill_round", 0) < 6 and s.get("chart_df") is not None
         if can_input:
             prompt = st.chat_input("分享你对当前行情的观察...")
         else:
             if s.get("skill_round", 0) >= 2:
                 st.info("本项技能训练结束，点击上方技能按钮切换下一项继续训练。")
             prompt = None
+
         if prompt:
             _send(prompt, df, bar, active_skill)
-
 def _send(text, chart_df, bar, skill):
     s = st.session_state
     dlg = s["coach_dialogue"]
