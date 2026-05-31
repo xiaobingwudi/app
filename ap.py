@@ -1,8 +1,8 @@
 """
 Al Brooks 价格行为读盘训练器 V19
-基于 V18_fixed 修改，只改两处：
-1. 数据加载：{exchange}{code} → {CODE}0 格式（akshare 1.18.22 兼容）
-2. 交互流程：chart_df固定 + 每技能最多2轮 + 图表只在换图时移动
+基于 V18_fixed 修改，仅改动：
+1. 数据加载：{exchange}{code} → {CODE}0 格式
+2. 交互：chart_df固定 + 每技能最多2轮 + 图表只在换图时移动
 """
 import streamlit as st
 import pandas as pd
@@ -15,10 +15,11 @@ import requests
 import json
 import re
 import random
+import os
 
 st.set_page_config(page_title="Al Brooks 读盘训练器", layout="wide", initial_sidebar_state="expanded")
 
-# ========== 品种配置（修改：直接使用{CODE}0格式） ==========
+# ========== 品种配置 ==========
 CONTRACTS = {
     "螺纹钢": "RB0", "铁矿石": "I0", "豆粕": "M0", "豆油": "Y0",
     "棕榈油": "P0", "焦煤": "JM0", "焦炭": "J0", "甲醇": "MA0",
@@ -47,7 +48,7 @@ SKILL_PROMPTS = {
     "市场接受度判断": "请分析市场对当前价格的接受程度：是否在某个价位出现拒绝、是否形成双底/双顶、是否有信号K线。"
 }
 
-# ========== 数据加载（修改：{CODE}0格式） ==========
+# ========== 数据加载 ==========
 @st.cache_data(ttl=3600)
 def load_data(product_name, period="30"):
     try:
@@ -77,9 +78,9 @@ def random_bar(df, n_bars=30):
 
 def get_ai_comment(skill_name, kline_data, user_input=None):
     try:
-        api_key = st.session_state.get("api_key", "")
+        api_key = os.environ.get("DEEPSEEK_API_KEY", st.secrets.get("DEEPSEEK_API_KEY", ""))
         if not api_key:
-            return "请先在侧边栏设置 DeepSeek API Key"
+            return "请设置 DEEPSEEK_API_KEY 环境变量"
         df_sample = kline_data.tail(20)
         kline_summary = []
         for _, row in df_sample.iterrows():
@@ -129,19 +130,22 @@ def get_ai_comment(skill_name, kline_data, user_input=None):
 def plot_candlestick(df_segment, width=900, height=500):
     fig = make_subplots(rows=2, cols=1, row_heights=[0.8, 0.2], shared_xaxes=True, vertical_spacing=0.03)
     fig.add_trace(go.Candlestick(
-        x=df_segment["datetime"], open=df_segment["open"], high=df_segment["high"],
+        x=list(range(len(df_segment))),
+        open=df_segment["open"], high=df_segment["high"],
         low=df_segment["low"], close=df_segment["close"], name="K线",
         increasing_line_color='#ef5350', decreasing_line_color='#26a69a'
     ), row=1, col=1)
-    fig.add_trace(go.Bar(x=df_segment["datetime"], y=df_segment["volume"], name="成交量",
-                         marker_color='#90a4ae', opacity=0.7), row=2, col=1)
+    fig.add_trace(go.Bar(
+        x=list(range(len(df_segment))), y=df_segment["volume"], name="成交量",
+        marker_color='#90a4ae', opacity=0.7
+    ), row=2, col=1)
     fig.update_layout(
         title=dict(text=f"{st.session_state.product} {PERIOD_LABELS.get(st.session_state.period, '30分钟')}", font=dict(size=14)),
         template="plotly_white", height=height, width=width,
         margin=dict(l=40, r=20, t=40, b=20), showlegend=False, hovermode="x unified"
     )
     fig.update_xaxes(rangeslider=dict(visible=False), row=1, col=1)
-    fig.update_xaxes(title_text="时间", row=2, col=1)
+    fig.update_xaxes(title_text="K线序号", row=2, col=1)
     fig.update_yaxes(title_text="成交量", row=2, col=1)
     return fig
 
@@ -149,7 +153,7 @@ def plot_candlestick(df_segment, width=900, height=500):
 def init_session():
     defaults = {
         "chart_df": None, "display_start": 0, "display_end": 30,
-        "product": "螺纹钢", "period": "30", "api_key": "",
+        "product": "螺纹钢", "period": "30",
         "current_skill": None,
         "skill_rounds": {s: 0 for s in SKILLS},
         "skill_responses": {},
@@ -173,7 +177,6 @@ with st.sidebar:
     st.markdown("### 设置")
     sel_product = st.selectbox("品种", list(CONTRACTS.keys()), index=0)
     sel_period = st.selectbox("周期", list(PERIODS.keys()), index=3)
-    st.text_input("DeepSeek API Key", type="password", key="api_key_input", placeholder="sk-...")
 
     if st.button("加载/重载数据", use_container_width=True):
         period_val = PERIODS[sel_period]
@@ -246,7 +249,7 @@ with col_info:
     if st.session_state.data_loaded:
         st.markdown(f"共 {st.session_state.total_bars} 根K线 | 当前 {st.session_state.display_start+1}-{st.session_state.display_end}")
 
-# ========== 图表区域 ==========
+# ========== 图表 ==========
 if st.session_state.data_loaded and st.session_state.chart_df is not None:
     df = st.session_state.chart_df
     start = st.session_state.display_start
@@ -282,14 +285,13 @@ if st.session_state.data_loaded and st.session_state.chart_df is not None:
     with col_status:
         st.markdown(f"第 {end}/{total} 根K线")
 
-    # chart_df固定，不随AI点评变化
     df_segment = df.iloc[start:end].copy()
     fig = plot_candlestick(df_segment, width=1000, height=520)
     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 else:
     st.info("请在侧边栏选择品种并点击「加载/重载数据」开始训练")
 
-# ========== 技能训练区 ==========
+# ========== 技能训练 ==========
 if st.session_state.data_loaded and st.session_state.chart_df is not None:
     st.markdown("---")
     st.markdown("### 技能训练")
@@ -347,7 +349,6 @@ if st.session_state.data_loaded and st.session_state.chart_df is not None:
         else:
             st.success(f"✅ {current_skill} 已完成 {MAX_ROUNDS_PER_SKILL} 轮训练！")
 
-    # 进度条
     st.markdown("---")
     st.markdown("### 训练进度")
     progress_cols = st.columns(len(SKILLS))
