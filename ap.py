@@ -499,7 +499,7 @@ def main():
             
             # 新增的“下一根”按钮
             with col_c:
-                if st.button("⏭️ 下一根", use_container_width=True):
+                if st.button("⏭️ Next", use_container_width=True):
                     current = st.session_state["current_bar"]
                     max_bar = len(df) - 1
                     if current < max_bar:
