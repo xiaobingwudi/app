@@ -1,4 +1,4 @@
-	"""
+"""
 Al Brooks 结构训练器 V18
 """
 import streamlit as st
