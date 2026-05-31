@@ -174,7 +174,7 @@ def build_chart(chart_df, bar):
                            showarrow=False, font=dict(size=7, color="#888888"),
                            yshift=-10 if row["close"] >= row["open"] else 10)
     fig.add_vline(x=bar-start, line_dash="dash", line_color="orange", line_width=1, opacity=0.6)
-    fig.update_layout(xaxis_rangeslider_visible=False, height=600,
+    fig.update_layout(xaxis_rangeslider_visible=False, height=400,
                       margin=dict(l=10, r=10, t=5, b=5),
                       paper_bgcolor="white", plot_bgcolor="white")
     fig.update_xaxes(showgrid=True, gridcolor="#f0f0f0")
