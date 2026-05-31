@@ -1,4 +1,4 @@
-"""
+	"""
 Al Brooks 结构训练器 V18
 """
 import streamlit as st
@@ -11,7 +11,7 @@ from openai import OpenAI
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import random, json, time, re
-
+ 
 SYMBOL_NAMES = {
     "IF": "沪深300股指", "IH": "上证50股指", "IC": "中证500股指", "IM": "中证1000股指",
     "CU": "沪铜", "AL": "沪铝", "ZN": "沪锌", "PB": "沪铅", "NI": "沪镍", "SN": "沪锡",
@@ -26,7 +26,7 @@ SYMBOL_NAMES = {
     "UR": "尿素", "SA": "纯碱", "SF": "硅铁", "SM": "锰硅", "CY": "棉纱", "PF": "短纤", "PK": "花生",
     "TS": "2年期国债", "TF": "5年期国债", "T": "10年期国债", "TL": "30年期国债",
 }
-
+ 
 SKILL_CONSTRAINTS = {
     1: {
         "name": "背景阅读",
@@ -64,59 +64,59 @@ SKILL_CONSTRAINTS = {
         "desc": "只关注价格突破后的市场反应，禁止交易建议。"
     }
 }
-
+ 
 AI_SYSTEM_PROMPT_TEMPLATE = """你是 Al Brooks 价格行为训练教练。
-
+ 
 【你的双重职责】
 1. 分析市场 - 你和其他教练一样，能看到K线数据，对当前行情有自己的判断
 2. 训练用户 - 通过提问和反馈，帮助用户提升观察能力
-
+ 
 【核心原则】
 你的判断是"参考答案"，不是"标准答案"。
 价格行为分析没有唯一正确答案，你的作用是：
 - 检查用户是否遗漏了重要维度
 - 提供另一个角度的观察
 - 帮助用户建立系统的观察框架
-
+ 
 当前用户正在训练：{skill_name}
 训练阶段：{level_name}
 {level_desc}
-
+ 
 当前技能的核心问题：{skill_question}
-
+ 
 【当前技能的语言约束 - 必须遵守】
 {skill_constraints}
-
+ 
 【用户阅读画像 - 了解用户的薄弱点】
 {reading_profile_text}
-
+ 
 【训练流程 - 严格执行】
-
+ 
 第1轮（用户首次作答）：
 - 检查用户的回答是否触及该技能的核心观察维度
 - 检查用户是否使用了禁止词汇（见上面的语言约束），如有则提醒
 - 如果到位：说"好的，我明白了"，然后直接进入第2轮流程
 - 如果不到位：给一次提示，只指向用户遗漏的具体维度，**绝对不给答案**
-
+ 
 第2轮（用户二次作答）：
 无论用户答得如何，执行以下两步：
 1. 对用户的回答给出简短点评（肯定到位的部分，指出仍可补充的维度）
 2. 亮出你自己的判断（基于你看到的K线数据，说清楚你的观察依据，引用具体K线编号）
 然后结束，不再追问。
-
+ 
 【约束】
 - 提示只给一次，第2轮必须亮出自己判断
 - 优先关注当前技能，用户问到其他领域可简短回应
 - 回答简短，不列大纲，不超过150字
 - 禁止使用禁止词汇列表中的任何词语
 """
-
+ 
 TRAIN_LEVEL = {
     1: {"name": "观察阶段", "desc": "允许模糊、整体感觉、通道、节奏、倾向。禁止结构辩论、精确确认、摆动定义。"},
     2: {"name": "行为细化阶段", "desc": "开始细化行为、具体K线、推进连续性。"},
     3: {"name": "结构验证阶段", "desc": "允许失败突破、摆动确认、Always In转换、结构争议。"},
 }
-
+ 
 AI_SUMMARY_PROMPT = """你是训练总结分析师。根据训练对话记录，分析用户的阅读习惯和训练进展。
 输出格式（JSON）：
 {
@@ -134,8 +134,13 @@ AI_SUMMARY_PROMPT = """你是训练总结分析师。根据训练对话记录，
 }
 profile_updates中的数值表示本次训练中该问题的出现次数（0-3），0表示未出现。
 要求：每条分析具体，引用训练中的实际表现，不要笼统评价，要有可操作性。"""
-
+ 
 def load_data(symbol, period="30"):
+    """
+    通过 akshare 获取新浪期货分钟数据
+    period: "30" = 30分钟K线, "15" = 15分钟, "60" = 60分钟, "day" = 日线
+    返回: DataFrame, 包含 open/high/low/close/volume/open_interest
+    """
     try:
         df = ak.futures_zh_minute_sina(symbol=symbol, period=period)
     except Exception as e:
@@ -151,8 +156,8 @@ def load_data(symbol, period="30"):
     })
     df = df.reset_index(drop=True)
     return df
-
-def build_chart(chart_df, bar):
+ 
+def build_chart(chart_df, bar, mode="strict"):
     end = bar + 1
     start = max(0, end - 60)
     df = chart_df.iloc[start:end].copy().reset_index(drop=True)
@@ -163,22 +168,23 @@ def build_chart(chart_df, bar):
     ), row=1, col=1)
     colors = ["red" if c >= o else "cyan" for o, c in zip(df["open"], df["close"])]
     fig.add_trace(go.Bar(x=df.index, y=df["volume"], marker_color=colors, showlegend=False, opacity=0.5), row=2, col=1)
-    # 每根K线都显示编号
     for idx in range(len(df)):
-        row = df.iloc[idx]
-        ny = row["low"] if row["close"] >= row["open"] else row["high"]
-        fig.add_annotation(x=idx, y=ny, text=str(df.index[idx] + start),
-                           showarrow=False, font=dict(size=7, color="#888888"),
-                           yshift=-10 if row["close"] >= row["open"] else 10)
+        if idx % 5 == 0:
+            row = df.iloc[idx]
+            ny = row["low"] if row["close"] >= row["open"] else row["high"]
+            fig.add_annotation(x=idx, y=ny, text=str(df.index[idx] + start),
+                               showarrow=False, font=dict(size=9, color="gray"),
+                               yshift=-10 if row["close"] >= row["open"] else 10)
     fig.add_vline(x=bar-start, line_dash="dash", line_color="orange", line_width=1, opacity=0.6)
     fig.update_layout(xaxis_rangeslider_visible=False, height=600,
-                      margin=dict(l=10, r=10, t=5, b=5),
+                      margin=dict(l=20, r=20, t=10, b=10),
                       paper_bgcolor="white", plot_bgcolor="white")
     fig.update_xaxes(showgrid=True, gridcolor="#f0f0f0")
     fig.update_yaxes(showgrid=True, gridcolor="#f0f0f0")
     return fig
-
+ 
 def _market_msg(chart_df, bar, skill_name):
+    """输出K线客观统计量，不含任何结论标签"""
     last = st.session_state.get("_mm_cache", {})
     if last.get("bar") == bar and last.get("skill") == skill_name:
         return last["data"]
@@ -191,33 +197,41 @@ def _market_msg(chart_df, bar, skill_name):
         total_range = h - l
         body_ratio = body / total_range if total_range > 0 else 0
         volume = float(row["volume"]) if "volume" in chart_df.columns else 0
+ 
         if body > 0:
-            if c >= o:
+            if c >= o:  # 阳线
                 close_position = (c - o) / body
-            else:
+            else:  # 阴线
                 close_position = (o - c) / body
         else:
             close_position = 0.5
+ 
         if total_range > 0:
             upper_shadow_pct = (h - max(o, c)) / total_range * 100
             lower_shadow_pct = (min(o, c) - l) / total_range * 100
         else:
             upper_shadow_pct = 0
             lower_shadow_pct = 0
+ 
         all_bars.append({"i": i, "o": o, "h": h, "l": l, "c": c,
-                         "body_ratio": body_ratio, "close_position": close_position,
+                         "body_ratio": body_ratio,
+                         "close_position": close_position,
                          "upper_shadow_pct": upper_shadow_pct,
                          "lower_shadow_pct": lower_shadow_pct,
-                         "volume": volume, "total_range": total_range})
+                         "volume": volume,
+                         "total_range": total_range})
+ 
     recent_vols = [b["volume"] for b in all_bars[-20:]]
     avg_volume = sum(recent_vols) / len(recent_vols) if recent_vols else 1
     recent_ranges = [b["total_range"] for b in all_bars[-20:]]
     avg_range = sum(recent_ranges) / len(recent_ranges) if recent_ranges else 1
+ 
     lines = ["【K线客观统计量（系统自动计算，供参考。这不是用户说的话）】"]
     recent = all_bars[-15:] if len(all_bars) >= 15 else all_bars
     for idx, k in enumerate(recent):
         vol_ratio = k["volume"] / avg_volume if avg_volume > 0 else 1
         range_ratio = k["total_range"] / avg_range if avg_range > 0 else 1
+ 
         overlap_ratio = 0.0
         if idx > 0:
             prev = recent[idx - 1]
@@ -228,6 +242,7 @@ def _market_msg(chart_df, bar, skill_name):
                 gap = min(k["l"], prev["l"]) - max(k["h"], prev["h"])
                 if gap > 0:
                     overlap_ratio = -gap / k["total_range"] if k["total_range"] > 0 else 0
+ 
         lines.append(
             f"  K{k['i']}: O={k['o']:.0f} H={k['h']:.0f} L={k['l']:.0f} C={k['c']:.0f}"
             f" | BodyRatio={k['body_ratio']*100:.0f}%"
@@ -242,24 +257,29 @@ def _market_msg(chart_df, bar, skill_name):
     result = "\n".join(lines)
     st.session_state["_mm_cache"] = {"bar": bar, "skill": skill_name, "data": result}
     return result
-
+ 
 def _gpt(messages):
     api_key = st.secrets.get("OPENAI_API_KEY", "")
     base_url = st.secrets.get("OPENAI_BASE_URL", "https://api.deepseek.com")
     model = st.secrets.get("OPENAI_MODEL", "deepseek-chat")
+ 
     if not api_key:
         st.error("API 密钥未配置！请在 Streamlit Cloud 后台设置 OPENAI_API_KEY")
         return "【配置提示】请先配置 DeepSeek API 密钥后再开始训练。"
+ 
     try:
         client = OpenAI(base_url=base_url, api_key=api_key)
         resp = client.chat.completions.create(
-            model=model, messages=messages, temperature=0.2, max_tokens=700
+            model=model,
+            messages=messages,
+            temperature=0.2,
+            max_tokens=700
         )
         return resp.choices[0].message.content
     except Exception as e:
         st.error(f"API 调用失败: {e}")
         return f"【API 错误】{e}"
-
+ 
 def _build_skill_constraints_text(skill_id):
     sk = SKILL_CONSTRAINTS[skill_id]
     forbidden = "、".join(sk["forbidden"])
@@ -267,7 +287,7 @@ def _build_skill_constraints_text(skill_id):
 允许使用的分析维度：{sk['allowed']}
 绝对禁止使用的词汇：{forbidden}
 如果用户的回答中包含禁止词汇，在点评时必须指出。"""
-
+ 
 def _build_reading_profile_text():
     rp = st.session_state.get("reading_profile", {})
     if not rp:
@@ -280,29 +300,36 @@ def _build_reading_profile_text():
         pct = rp[key] / total * 100
         items.append(f"  - {key}: 出现{rp[key]}次 ({pct:.0f}%)")
     return "用户历史训练中暴露的薄弱点（出现次数越多越需要关注）：\n" + "\n".join(items)
-
+ 
 def ask_coach(chart_df, bar, skill_name, skill_id, dialogue, level=1, is_second_round=False):
     lv = TRAIN_LEVEL.get(level, TRAIN_LEVEL[1])
     constraints = _build_skill_constraints_text(skill_id)
     profile_text = _build_reading_profile_text()
+ 
     sp = AI_SYSTEM_PROMPT_TEMPLATE.format(
-        skill_name=skill_name, level_name=lv["name"], level_desc=lv["desc"],
+        skill_name=skill_name,
+        level_name=lv["name"],
+        level_desc=lv["desc"],
         skill_question=SKILL_CONSTRAINTS[skill_id]["question"],
-        skill_constraints=constraints, reading_profile_text=profile_text
+        skill_constraints=constraints,
+        reading_profile_text=profile_text
     )
     sp += "\n\n" + _market_msg(chart_df, bar, skill_name)
+ 
     if is_second_round:
         sp += "\n\n【这是第2轮】你必须：1) 点评用户的回答  2) 亮出你自己的判断（引用具体K线编号）"
+ 
     msgs = [{"role": "system", "content": sp}]
     for m in dialogue[-10:]:
         msgs.append({"role": m["role"], "content": m["content"]})
     return _gpt(msgs)
-
+ 
 def ask_summary(dialogue, observations, skill_id=None):
     if not dialogue and not observations:
         return json.dumps({"observations":["暂无训练数据"], "strong_areas":[], "weak_areas":[], "next_focus":[]})
     ot = "\n".join(f"- {o['text']}" for o in observations[-20:])
     dt = "\n".join("{}: {}".format("用户" if m["role"]=="user" else "教练", m["content"]) for m in dialogue[-40:])
+ 
     rp_text = "当前用户阅读画像：\n"
     rp = st.session_state.get("reading_profile", {})
     if rp:
@@ -310,9 +337,10 @@ def ask_summary(dialogue, observations, skill_id=None):
             rp_text += f"  {k}: {v}\n"
     else:
         rp_text += "  暂无数据\n"
+ 
     return _gpt([{"role":"system","content":AI_SUMMARY_PROMPT},
                   {"role":"user","content":f"【观察】\n{ot}\n\n【对话】\n{dt}\n\n{rp_text}"}])
-
+ 
 def update_reading_profile(summary_json):
     try:
         data = json.loads(summary_json)
@@ -326,7 +354,7 @@ def update_reading_profile(summary_json):
         st.session_state["reading_profile"] = rp
     except (json.JSONDecodeError, AttributeError):
         pass
-
+ 
 SKILLS = [
     {"id": 1, "name": "背景阅读"},
     {"id": 2, "name": "控制权识别"},
@@ -334,7 +362,7 @@ SKILLS = [
     {"id": 4, "name": "回调vs转换"},
     {"id": 5, "name": "市场接受"},
 ]
-
+ 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _fetch_all_contracts():
     def _fetch_one(ex):
@@ -353,17 +381,19 @@ def _fetch_all_contracts():
                 code = "".join(ch for ch in c[:4] if ch.isalpha()).upper()
                 if code in SYMBOL_NAMES and code not in mc: mc[code]=c
     return mc
-
+ 
 def _load_all_main_contracts(mc):
     mc.update(_fetch_all_contracts())
-
+ 
 def _random_bar(df, min_bar=60):
+    """在有效范围内随机选一个起始K线位置"""
     return random.randint(min_bar, len(df) - 1)
-
+ 
 def _do_load(sym_code, sym_main, period="30"):
     with st.spinner("加载中..."):
         df = load_data(sym_main, period=period)
         if df is not None:
+            # 随机起始位置
             start_bar = _random_bar(df)
             st.session_state["chart_df"] = df
             st.session_state["current_bar"] = start_bar
@@ -377,70 +407,13 @@ def _do_load(sym_code, sym_main, period="30"):
             st.session_state["symbol_main"] = sym_main
             st.session_state["symbol_name"] = SYMBOL_NAMES.get(sym_code, sym_code)
             st.session_state["data_period"] = period
-            st.success(f"已加载 {SYMBOL_NAMES.get(sym_code, sym_code)} ({sym_main}) | {len(df)}根K线 | 周期{period}分钟")
-            time.sleep(0.3)
+            st.success(f"已加载 {SYMBOL_NAMES.get(sym_code, sym_code)} ({sym_main}) | {len(df)}根K线 | 周期{period}分钟 | 起始位置K{start_bar}")
+            time.sleep(0.5)
             st.rerun()
-
+ 
 def main():
     st.set_page_config(page_title="Al Brooks 结构训练器", layout="wide")
-
-    st.markdown("""
-    <style>
-        section[data-testid="stSidebar"] {
-            width: 280px !important;
-            min-width: 240px !important;
-            max-width: 320px !important;
-        }
-        section[data-testid="stSidebar"] .block-container {
-            padding-top: 1rem !important;
-            padding-left: 0.8rem !important;
-            padding-right: 0.8rem !important;
-        }
-        .stMarkdown, .stCaption {
-            margin-bottom: 0.2rem !important;
-        }
-        div[data-testid="stExpander"] {
-            margin-bottom: 0.2rem !important;
-        }
-        div[data-testid="stExpander"] details {
-            border: none !important;
-        }
-        div[data-testid="stExpander"] summary {
-            padding: 0.2rem 0.5rem !important;
-            font-size: 0.85rem !important;
-        }
-        div[data-testid="stExpander"] div[data-testid="element-container"] {
-            padding: 0 !important;
-        }
-        .stButton button {
-            font-size: 0.75rem !important;
-            padding: 0.15rem 0.3rem !important;
-            min-height: 0 !important;
-            line-height: 1.4 !important;
-        }
-        div[data-testid="stSelectbox"] {
-            margin-bottom: 0.2rem !important;
-        }
-        div[data-testid="stSelectbox"] > div {
-            min-height: 1.8rem !important;
-        }
-        hr {
-            margin: 0.4rem 0 !important;
-        }
-        div[data-testid="stInfo"] {
-            padding: 0.3rem !important;
-            font-size: 0.8rem !important;
-        }
-        div[data-testid="stSuccess"] {
-            padding: 0.3rem !important;
-            font-size: 0.8rem !important;
-        }
-        .stCaption {
-            font-size: 0.75rem !important;
-        }
-    </style>
-    """, unsafe_allow_html=True)
-
+ 
     for k, v in {
         "chart_df": None, "current_bar": 40, "coach_dialogue": [], "send_counter": 0,
         "training_summary": "", "skill_round": 0, "train_level": 1, "observations": [],
@@ -449,26 +422,9 @@ def main():
     }.items():
         if k not in st.session_state:
             st.session_state[k] = v
-
+ 
     with st.sidebar:
-        st.markdown("**品种选择**")
-        period_map = {"15分钟": "15", "30分钟": "30", "60分钟": "60", "日线": "day"}
-        period_label = st.selectbox(
-            "周期", options=list(period_map.keys()),
-            index=1, key="period_selector", label_visibility="collapsed"
-        )
-        selected_period = period_map[period_label]
-
-        with st.expander("数据源信息", expanded=False):
-            st.caption(
-                f"来源: 新浪财经(akshare)<br>"
-                f"周期: {st.session_state['data_period']}分钟<br>"
-                f"合约: 主力连续"
-            )
-            if st.session_state.get("chart_df") is not None:
-                df = st.session_state["chart_df"]
-                st.caption(f"K线数: {len(df)}根")
-
+        st.markdown("### 品种选择")
         exchanges = {
             "金融": ["IF","IH","IC","IM","TS","TF","T","TL"],
             "有色": ["CU","AL","ZN","PB","NI","SN","AU","AG","BC"],
@@ -477,72 +433,116 @@ def main():
             "农产品": ["A","B","M","Y","P","C","CS","JD","CF","SR","RM","OI","FG","AP","CJ","PK","LH"],
             "能源": ["SC","FU","BU","LU","NR","RU"],
         }
+ 
+        # ---- 数据源信息展示 ----
+        st.caption(
+            f"**数据源**: 新浪财经 (akshare)\n"
+            f"**周期**: {st.session_state['data_period']}分钟K线\n"
+            f"**合约**: 主力连续合约 (match_main_contract)"
+        )
+        if st.session_state.get("chart_df") is not None:
+            df = st.session_state["chart_df"]
+            st.caption(f"**数据长度**: {len(df)}根K线")
+ 
+        # ---- 周期选择 ----
+        st.divider()
+        period_map = {"15分钟": "15", "30分钟": "30", "60分钟": "60", "日线": "day"}
+        period_label = st.selectbox(
+            "K线周期",
+            options=list(period_map.keys()),
+            index=1,
+            key="period_selector"
+        )
+        selected_period = period_map[period_label]
+ 
+        # ---- 品种按钮 ----
         mc = {}
         _load_all_main_contracts(mc)
         for cat, codes in exchanges.items():
             with st.expander(cat, expanded=(cat == "金融")):
-                cols = st.columns(4)
+                cols = st.columns(3)
                 for idx, code in enumerate(codes):
                     if code in mc:
-                        if cols[idx % 4].button(code, key=f"sym_{code}", use_container_width=True):
+                        if cols[idx % 3].button(code, key=f"sym_{code}", use_container_width=True):
                             _do_load(code, mc[code], period=selected_period)
-
+ 
+        st.divider()
+ 
+        # ---- 随机跳转按钮（已有数据时） ----
         if st.session_state.get("chart_df") is not None:
             df = st.session_state["chart_df"]
-            col_a, col_b = st.columns(2)
-            with col_a:
-                if st.button("🎲 随机", use_container_width=True):
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🎲 随机跳转", use_container_width=True):
                     new_bar = _random_bar(df)
                     st.session_state["current_bar"] = new_bar
                     st.session_state["_mm_cache"] = {}
+                    st.success(f"跳转到 K{new_bar}")
+                    time.sleep(0.3)
                     st.rerun()
-            with col_b:
+            with col2:
+                # 同品种重新加载（随机起始）
                 sym_code = st.session_state.get("symbol_code", "")
                 sym_main = st.session_state.get("symbol_main", "")
                 if sym_code and sym_main:
-                    if st.button("🔄 重载", use_container_width=True):
+                    if st.button("🔄 重新加载", use_container_width=True):
                         _do_load(sym_code, sym_main, period=selected_period)
-
+ 
+        st.divider()
+ 
+        # ---- 训练阶段 ----
         level = st.selectbox(
-            "阶段", options=[1, 2, 3],
+            "训练阶段", options=[1, 2, 3],
             format_func=lambda x: f"阶段{x}: {TRAIN_LEVEL[x]['name']}",
             index=st.session_state.get("train_level", 1) - 1,
-            key="train_level_sel", label_visibility="collapsed"
+            key="train_level_sel"
         )
         st.session_state["train_level"] = level
-
-        st.caption(f"当前: {st.session_state.get('symbol_name','-')} | K{st.session_state.get('current_bar','-')}")
-        if st.session_state.get("chart_df") is not None:
-            df = st.session_state["chart_df"]
-            bar = st.slider("K线", 41, len(df) - 1, value=st.session_state["current_bar"],
-                           key="bar_slider", label_visibility="collapsed")
-            st.session_state["current_bar"] = bar
-
+        st.divider()
+ 
+        # ---- 阅读画像 ----
         rp = st.session_state.get("reading_profile", {})
         if rp:
-            st.markdown("**阅读画像**")
+            st.markdown("### 阅读画像")
             total = sum(rp.values())
             for key in sorted(rp, key=rp.get, reverse=True):
                 pct = rp[key] / total * 100 if total > 0 else 0
-                bw = max(pct, 4)
+                bar_width = max(pct, 5)
                 st.markdown(
-                    f"<div style='margin-bottom:3px;font-size:11px;'>"
-                    f"<span style='font-size:11px;'>{key}</span>"
-                    f"<div style='background:#f0f0f0;border-radius:3px;height:12px;'>"
-                    f"<div style='background:#e74c3c;width:{bw}%;height:12px;border-radius:3px;text-align:right;"
-                    f"font-size:9px;color:white;padding-right:3px;line-height:12px;'>{rp[key]}</div></div></div>",
+                    f"<div style='margin-bottom:6px;'>"
+                    f"<span style='font-size:12px;'>{key}</span>"
+                    f"<div style='background:#f0f0f0;border-radius:4px;height:16px;'>"
+                    f"<div style='background:#e74c3c;width:{bar_width}%;height:16px;border-radius:4px;text-align:right;"
+                    f"font-size:10px;color:white;padding-right:4px;line-height:16px;'>{rp[key]}</div></div></div>",
                     unsafe_allow_html=True
                 )
             if st.button("重置画像", use_container_width=True):
                 st.session_state["reading_profile"] = {}
                 st.rerun()
-
+ 
+        # ---- 当前状态 ----
+        st.caption(f"当前: {st.session_state.get('symbol_name','未选择')}")
+        if st.session_state.get("chart_df") is not None:
+            df = st.session_state["chart_df"]
+            st.caption(f"数据: {len(df)}根K线 | Bar: {st.session_state['current_bar']}")
+            bar = st.slider("K线位置", 41, len(df) - 1, value=st.session_state["current_bar"], key="bar_slider")
+            st.session_state["current_bar"] = bar
+            if st.button("生成总结", use_container_width=True):
+                with st.spinner("分析中..."):
+                    summary = ask_summary(st.session_state["coach_dialogue"], st.session_state["observations"])
+                    st.session_state["training_summary"] = summary
+                    update_reading_profile(summary)
+                    st.rerun()
+            if st.session_state.get("training_summary"):
+                with st.expander("训练总结", expanded=True):
+                    st.text(st.session_state["training_summary"])
+ 
     df = st.session_state.get("chart_df")
     if df is None:
         st.info("请从左侧选择品种开始训练")
         return
     bar = st.session_state["current_bar"]
-
+ 
     with st.container():
         current_skill_id = st.session_state.get("train_mode", 1)
         cols = st.columns(5)
@@ -563,17 +563,17 @@ def main():
             f"阶段: {TRAIN_LEVEL[st.session_state['train_level']]['name']} | "
             f"第{st.session_state['skill_round']+1}/2 轮"
         )
-
+ 
     with st.container():
         st.plotly_chart(build_chart(df, bar), use_container_width=True)
-
+ 
     with st.container():
         st.markdown("### 教练")
         for m in st.session_state["coach_dialogue"][-10:]:
             with st.chat_message("user" if m["role"] == "user" else "assistant"):
                 st.markdown(f"**{'🧑 你' if m['role']=='user' else '🤖 教练'}**")
                 st.markdown(m["content"])
-
+ 
         s = st.session_state
         can_input = s.get("skill_round", 0) < 2 and s.get("chart_df") is not None
         if can_input:
@@ -584,7 +584,7 @@ def main():
             prompt = None
         if prompt:
             _send(prompt, df, bar, active_skill)
-
+ 
 def _send(text, chart_df, bar, skill):
     s = st.session_state
     dlg = s["coach_dialogue"]
@@ -608,6 +608,6 @@ def _send(text, chart_df, bar, skill):
     s["coach_dialogue"] = dlg
     s["send_counter"] = s.get("send_counter", 0) + 1
     st.rerun()
-
+ 
 if __name__ == "__main__":
     main()
