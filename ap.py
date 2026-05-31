@@ -1,7 +1,11 @@
 """
 Al Brooks 结构训练器 V19
 ========================
-核心改进：图表不随AI点评变化，技能独立轮次控制，最多2轮输入
+基于 V18 布局，只改交互逻辑：
+1. chart_df 加载后固定，AI 点评不改变图表
+2. 每个技能最多 2 轮输入，完成后输入框禁用
+3. 点击"下一根"或"随机跳转"才移动图表
+4. 修复数据加载空 DataFrame 错误
 """
 import streamlit as st
 import pandas as pd
@@ -11,7 +15,6 @@ import akshare as ak
 from datetime import datetime, timedelta
 import random
 import json
-import re
 
 # ====== 页面配置 ======
 st.set_page_config(page_title="Al Brooks 结构训练器 V19", layout="wide")
@@ -36,12 +39,12 @@ st.markdown("""
 
 # ====== Session State 初始化 ======
 defaults = {
-    "chart_df": None,           # 完整K线数据（加载一次，永不改变）
-    "display_start": 0,         # 显示起始位置
-    "display_count": 60,        # 显示多少根K线
-    "current_skill": None,      # 当前激活的技能: "skill_1" ~ "skill_5"
-    "skill_rounds": {},         # 各技能已用轮次: {"skill_1": 0, ...}
-    "coach_dialogue": [],       # 当前技能的对话历史
+    "chart_df": None,
+    "display_start": 0,
+    "display_count": 60,
+    "current_skill": None,
+    "skill_rounds": {},
+    "coach_dialogue": [],
     "reading_profile": {
         "经常忽略背景": 0,
         "经常忽略控制权": 0,
@@ -50,16 +53,15 @@ defaults = {
         "忽略细节行为": 0,
     },
     "data_source": {},
-    "initialized": False,
     "total_bars": 0,
-    "reload_data_flag": False,   # 重新从接口加载数据
-    "random_jump_flag": False,   # 在同一数据内随机跳转
+    "reload_data_flag": False,
+    "random_jump_flag": False,
 }
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# ====== 品种与周期配置 ======
+# ====== 品种与周期 ======
 SYMBOLS = {
     "螺纹": "rb", "铁矿": "i", "沪铜": "cu", "原油": "sc",
     "豆粕": "m", "甲醇": "MA", "PTA": "TA", "棕榈": "p",
@@ -73,7 +75,6 @@ EXCHANGE_NAMES = {
     "shfe": "上海期货交易所", "dce": "大连商品交易所", "czce": "郑州商品交易所",
 }
 
-# ====== 5个技能配置 ======
 SKILL_NAMES = {
     "skill_1": "背景阅读",
     "skill_2": "控制权识别",
@@ -148,67 +149,71 @@ SKILL_PROMPTS = {
 }
 
 MAX_ROUNDS_PER_SKILL = 2
-BARS_TO_SHOW = 60  # 每次显示的K线数量（固定，聚焦最近60根）
 
 # ====== 数据加载 ======
 def load_data(symbol_key, period_key):
-    """加载品种数据，返回DataFrame"""
+    """加载品种数据"""
     try:
         code = SYMBOLS[symbol_key]
         period = PERIODS[period_key]
         exchange = EXCHANGES[code]
         
         if period == "D":
-            df = ak.futures_zh_daily_sina(symbol=f"{exchange}{code}")
-            df.columns = [c.lower() for c in df.columns]
-            df = df.rename(columns={"date": "time", "open": "o", "high": "h", "low": "l", "close": "c", "volume": "v"})
-            df = df.sort_values("time").reset_index(drop=True)
+            raw = ak.futures_zh_daily_sina(symbol=f"{exchange}{code}")
         else:
-            df = ak.futures_zh_minute_sina(symbol=f"{exchange}{code}", period=period)
-            cols = [c.lower() for c in df.columns]
-            df.columns = cols
-            rename_map = {}
-            for c in cols:
-                if c in ("日期", "date", "day", "datetime", "时间"): rename_map[c] = "time"
-                elif c in ("开盘", "open", "o"): rename_map[c] = "o"
-                elif c in ("最高", "high", "h"): rename_map[c] = "h"
-                elif c in ("最低", "low", "l"): rename_map[c] = "l"
-                elif c in ("收盘", "close", "c"): rename_map[c] = "c"
-                elif c in ("成交量", "volume", "vol", "v", "持仓量"): rename_map[c] = "v"
-            df = df.rename(columns=rename_map)
-            if "time" not in df.columns:
-                df["time"] = range(len(df))
-            df = df.sort_values("time").reset_index(drop=True)
+            raw = ak.futures_zh_minute_sina(symbol=f"{exchange}{code}", period=period)
         
+        if raw is None or raw.empty:
+            return None
+        
+        df = raw.copy()
+        
+        # 列名映射：逐列判断，避免列数不匹配错误
+        col_map = {}
+        for c in df.columns:
+            cl = str(c).lower().strip()
+            if cl in ("date", "日期", "交易日", "day", "datetime", "时间"):
+                col_map[c] = "time"
+            elif cl in ("open", "开盘", "o"):
+                col_map[c] = "o"
+            elif cl in ("high", "最高", "h"):
+                col_map[c] = "h"
+            elif cl in ("low", "最低", "l"):
+                col_map[c] = "l"
+            elif cl in ("close", "收盘", "c"):
+                col_map[c] = "c"
+            elif cl in ("volume", "成交量", "vol", "v", "持仓量"):
+                col_map[c] = "v"
+            else:
+                col_map[c] = c  # 保持原名
+        
+        df = df.rename(columns=col_map)
+        
+        # 检查必要列
         for col in ["o", "h", "l", "c"]:
             if col not in df.columns:
-                df[col] = 0.0
+                return None
+        
+        if "time" not in df.columns:
+            df["time"] = range(len(df))
         if "v" not in df.columns:
             df["v"] = 0
         
+        # 数值化
         for col in ["o", "h", "l", "c", "v"]:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+        
+        df = df.sort_values("time").reset_index(drop=True)
+        
+        if len(df) < 10:
+            return None
         
         return df
     except Exception as e:
         st.error(f"数据加载失败: {e}")
         return None
 
-def get_main_contract(symbol_key):
-    """获取主力合约代码"""
-    try:
-        code = SYMBOLS[symbol_key]
-        exchange = EXCHANGES[code]
-        match = ak.match_main_contract(exchange)
-        if code.upper() in match["代码"].values:
-            row = match[match["代码"] == code.upper()]
-            return row["主力合约"].values[0]
-        return f"{exchange}{code}"
-    except:
-        return None
-
 def compute_bar_stats(df, idx):
-    """计算单根K线的客观统计量"""
     if idx < 0 or idx >= len(df):
         return ""
     bar = df.iloc[idx]
@@ -226,36 +231,29 @@ def compute_bar_stats(df, idx):
     overlap_ratio = 0.0
     if idx > 0:
         prev = df.iloc[idx - 1]
-        po, ph, pl = float(prev["o"]), float(prev["h"]), float(prev["l"])
-        overlap = max(0, min(h, ph) - max(l, pl))
+        overlap = max(0, min(h, float(prev["h"])) - max(l, float(prev["l"])))
         overlap_ratio = overlap / rng if rng > 0 else 0
     
     vol_ratio = 1.0
     if idx >= 5:
-        prev_vols = [float(df.iloc[i]["v"]) for i in range(idx - 5, idx)]
-        avg_vol = sum(prev_vols) / len(prev_vols)
-        vol_ratio = v / avg_vol if avg_vol > 0 else 1.0
+        vols = [float(df.iloc[i]["v"]) for i in range(idx - 5, idx)]
+        avg_v = sum(vols) / len(vols)
+        vol_ratio = v / avg_v if avg_v > 0 else 1.0
     
-    stats = (
+    return (
         f"K{idx}: O={o:.1f} H={h:.1f} L={l:.1f} C={c:.1f} "
         f"BodyRatio={body_ratio:.0%} CloseLocation={close_location:.0f}% "
         f"UpperShadow={upper_shadow:.0%} LowerShadow={lower_shadow:.0%} "
         f"Vol={v:.0f} VolRatio={vol_ratio:.2f} OverlapRatio={overlap_ratio:.2f}"
     )
-    return stats
 
 def prepare_market_msg(df, display_start, display_count):
-    """准备发送给AI的市场数据（纯客观统计量）"""
     start = display_start
     end = min(display_start + display_count, len(df))
-    lines = []
-    for i in range(start, end):
-        lines.append(compute_bar_stats(df, i))
-    return "\n".join(lines)
+    return "\n".join([compute_bar_stats(df, i) for i in range(start, end)])
 
 # ====== AI 教练 ======
 def ask_coach(skill_key, user_input, market_data_str, reading_profile):
-    """调用AI教练进行点评"""
     api_key = st.secrets.get("OPENAI_API_KEY", "")
     if not api_key:
         return "错误：API Key 未配置。请在 Streamlit Cloud 后台设置 OPENAI_API_KEY。"
@@ -264,25 +262,19 @@ def ask_coach(skill_key, user_input, market_data_str, reading_profile):
     client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
     
     profile_str = "\n".join([f"- {k}: {v}次" for k, v in reading_profile.items() if v > 0])
-    profile_hint = ""
-    if profile_str:
-        profile_hint = f"\n\n【用户阅读画像（薄弱点追踪）】\n{profile_str}\n请根据画像针对性地训练用户。"
-    
-    skill_constraints = SKILL_PROMPTS.get(skill_key, "")
+    profile_hint = f"\n\n【用户阅读画像（薄弱点追踪）】\n{profile_str}\n请根据画像针对性地训练用户。" if profile_str else ""
     
     system_prompt = f"""你是Al Brooks价格行为训练教练。你的任务是引导用户观察市场行为，而不是直接给答案。
 
-{skill_constraints}
+{SKILL_PROMPTS.get(skill_key, '')}
 
 【规则】
 1. 先点评用户的观察（是否正确、遗漏了什么）
 2. 再补充你的分析，但不要提前告诉用户结论
 3. 用提问引导用户自己发现关键特征
-4. 如果用户回答正确，给予肯定并追问更深入的细节
-5. 如果用户回答有误或遗漏，指出遗漏点并引导用户重新观察
-6. 每轮点评控制在200字以内
-7. 不要使用"大阳线""中阳线""大阴线""放量""缩量"等传统标签
-8. 使用客观数据（BodyRatio、CloseLocation等）来描述K线行为
+4. 每轮点评控制在200字以内
+5. 不使用"大阳线""放量""缩量"等传统标签
+6. 使用客观数据（BodyRatio、CloseLocation等）
 {profile_hint}
 
 【当前市场数据（系统自动生成，非用户发言）】
@@ -290,55 +282,40 @@ def ask_coach(skill_key, user_input, market_data_str, reading_profile):
 
 请基于以上数据对用户的观察进行点评。"""
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_input},
-    ]
-    
     try:
         resp = client.chat.completions.create(
             model="deepseek-chat",
-            messages=messages,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_input},
+            ],
             temperature=0.2,
             max_tokens=700,
         )
         reply = resp.choices[0].message.content
-        
-        # 尝试从回复中提取阅读画像更新
         try:
-            profile_updates = json.loads(reply)
-            if isinstance(profile_updates, dict) and "profile_updates" in profile_updates:
-                for k, v in profile_updates["profile_updates"].items():
+            updates = json.loads(reply)
+            if isinstance(updates, dict) and "profile_updates" in updates:
+                for k, v in updates["profile_updates"].items():
                     if k in st.session_state.reading_profile:
                         st.session_state.reading_profile[k] += v
-        except (json.JSONDecodeError, TypeError):
+        except:
             pass
-        
         return reply
     except Exception as e:
         return f"AI调用失败: {str(e)}"
 
-# ====== 绘图函数 ======
+# ====== 绘图 ======
 def plot_chart(df, display_start, display_count):
-    """绘制K线图，显示从 display_start 开始的 display_count 根"""
     end = min(display_start + display_count, len(df))
     plot_df = df.iloc[display_start:end].reset_index(drop=True)
     
-    fig = make_subplots(
-        rows=2, cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.03,
-        row_heights=[0.75, 0.25],
-    )
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.75, 0.25])
     
     fig.add_trace(
-        go.Candlestick(
-            x=list(range(len(plot_df))),
-            open=plot_df["o"], high=plot_df["h"],
-            low=plot_df["l"], close=plot_df["c"],
-            increasing_line_color="#26a69a", decreasing_line_color="#ef5350",
-            showlegend=False,
-        ),
+        go.Candlestick(x=list(range(len(plot_df))), open=plot_df["o"], high=plot_df["h"],
+                       low=plot_df["l"], close=plot_df["c"],
+                       increasing_line_color="#26a69a", decreasing_line_color="#ef5350", showlegend=False),
         row=1, col=1,
     )
     
@@ -349,50 +326,32 @@ def plot_chart(df, display_start, display_count):
         row=2, col=1,
     )
     
-    # 每根K线标注实际序号
     for i in range(len(plot_df)):
-        actual_idx = display_start + i
-        fig.add_annotation(
-            x=i, y=float(plot_df.iloc[i]["h"]),
-            text=str(actual_idx),
-            showarrow=False,
-            yshift=8,
-            font=dict(size=7, color="#888888"),
-            row=1, col=1,
-        )
+        fig.add_annotation(x=i, y=float(plot_df.iloc[i]["h"]), text=str(display_start + i),
+                           showarrow=False, yshift=8, font=dict(size=7, color="#888888"), row=1, col=1)
     
-    fig.update_layout(
-        height=500,
-        margin=dict(l=20, r=20, t=20, b=20),
-        xaxis_rangeslider_visible=False,
-        hovermode="x unified",
-    )
-    
+    fig.update_layout(height=500, margin=dict(l=20, r=20, t=20, b=20),
+                      xaxis_rangeslider_visible=False, hovermode="x unified")
     fig.update_xaxes(row=2, col=1, title_text="K线序号")
     fig.update_yaxes(row=1, col=1, title_text="价格")
     fig.update_yaxes(row=2, col=1, title_text="成交量")
-    
     return fig
 
-# ====== 重置技能状态的辅助函数 ======
 def reset_skill_states():
-    """切换数据时重置所有技能相关状态"""
     st.session_state.current_skill = None
     st.session_state.skill_rounds = {}
     st.session_state.coach_dialogue = []
 
-# ====== 侧边栏 ======
+# ====== 侧边栏（与V18一致） ======
 with st.sidebar:
     st.markdown("### ⚙️ 控制面板")
     
-    # 品种选择
     col1, col2 = st.columns(2)
     with col1:
         sel_symbol = st.selectbox("品种", list(SYMBOLS.keys()), key="sel_symbol")
     with col2:
         sel_period = st.selectbox("周期", list(PERIODS.keys()), key="sel_period")
     
-    # 操作按钮
     col_a, col_b = st.columns(2)
     with col_a:
         if st.button("🔄 随机跳转", use_container_width=True):
@@ -403,24 +362,27 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # 下一根按钮
-    if st.button("⏩ 下一根 K线", use_container_width=True):
+    col_c, col_d = st.columns(2)
+    with col_c:
+        num_bars = st.number_input("显示K线数", min_value=10, max_value=200, value=60, step=5, key="num_bars_input")
+    with col_d:
+        start_offset = st.number_input("起始偏移", min_value=0, max_value=1000, value=0, step=1, key="start_offset")
+    
+    if st.button("⏩ 下一根", use_container_width=True):
         if st.session_state.chart_df is not None:
             total = len(st.session_state.chart_df)
             new_start = st.session_state.display_start + 1
-            if new_start + BARS_TO_SHOW <= total:
+            if new_start + st.session_state.display_count <= total:
                 st.session_state.display_start = new_start
                 reset_skill_states()
     
     st.markdown("---")
     
-    # 5个技能按钮
     st.markdown("### 🎯 训练技能")
     cols = st.columns(2)
     skill_keys = list(SKILL_NAMES.keys())
     for i, sk in enumerate(skill_keys):
-        col_idx = i % 2
-        with cols[col_idx]:
+        with cols[i % 2]:
             rounds_used = st.session_state.skill_rounds.get(sk, 0)
             label = f"{SKILL_NAMES[sk]} ({rounds_used}/{MAX_ROUNDS_PER_SKILL})"
             is_active = st.session_state.current_skill == sk
@@ -434,7 +396,6 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # 数据源信息（折叠）
     if st.session_state.data_source:
         with st.expander("📊 数据源", expanded=False):
             ds = st.session_state.data_source
@@ -447,83 +408,73 @@ with st.sidebar:
 # ====== 主区域 ======
 st.title("Al Brooks 价格行为结构训练器 V19")
 
-# ====== 数据加载/切换逻辑 ======
+# ====== 数据加载/切换 ======
 df = st.session_state.chart_df
 
-# 条件1：初始加载（无数据）
 if df is None:
+    # 首次加载
     with st.spinner("正在加载数据..."):
         df = load_data(sel_symbol, sel_period)
-        if df is not None and len(df) > 0:
+        if df is not None:
             st.session_state.chart_df = df
             st.session_state.total_bars = len(df)
-            st.session_state.display_start = 0
-            st.session_state.display_count = BARS_TO_SHOW
-            # 数据源信息
+            st.session_state.display_count = num_bars
+            st.session_state.display_start = min(start_offset, max(0, len(df) - num_bars))
             exchange_name = EXCHANGE_NAMES.get(EXCHANGES.get(SYMBOLS.get(sel_symbol, ""), ""), "")
+            tr = f"{df.iloc[0]['time']} ~ {df.iloc[-1]['time']}" if "time" in df.columns else "-"
             st.session_state.data_source = {
-                "symbol": sel_symbol,
-                "period": sel_period,
-                "exchange": exchange_name,
-                "total_bars": len(df),
-                "time_range": f"{df.iloc[0]['time']} ~ {df.iloc[-1]['time']}" if "time" in df.columns else "-",
+                "symbol": sel_symbol, "period": sel_period,
+                "exchange": exchange_name, "total_bars": len(df), "time_range": tr,
             }
             reset_skill_states()
             st.rerun()
         else:
             st.error("数据加载失败，请尝试其他品种或周期")
 
-# 条件2：重载数据（从接口重新拉取）
 elif st.session_state.reload_data_flag:
+    # 重载数据（重新从接口拉取）
     st.session_state.reload_data_flag = False
     with st.spinner("正在重载数据..."):
         df = load_data(sel_symbol, sel_period)
-        if df is not None and len(df) > 0:
+        if df is not None:
             st.session_state.chart_df = df
             st.session_state.total_bars = len(df)
+            st.session_state.display_count = num_bars
             st.session_state.display_start = 0
-            st.session_state.display_count = BARS_TO_SHOW
             exchange_name = EXCHANGE_NAMES.get(EXCHANGES.get(SYMBOLS.get(sel_symbol, ""), ""), "")
+            tr = f"{df.iloc[0]['time']} ~ {df.iloc[-1]['time']}" if "time" in df.columns else "-"
             st.session_state.data_source = {
-                "symbol": sel_symbol,
-                "period": sel_period,
-                "exchange": exchange_name,
-                "total_bars": len(df),
-                "time_range": f"{df.iloc[0]['time']} ~ {df.iloc[-1]['time']}" if "time" in df.columns else "-",
+                "symbol": sel_symbol, "period": sel_period,
+                "exchange": exchange_name, "total_bars": len(df), "time_range": tr,
             }
             reset_skill_states()
             st.rerun()
 
-# 条件3：随机跳转（在同一数据集内随机选位置）
 elif st.session_state.random_jump_flag:
+    # 随机跳转（同一数据内随机位置）
     st.session_state.random_jump_flag = False
-    df = st.session_state.chart_df
-    total = len(df)
-    max_start = max(0, total - BARS_TO_SHOW - 10)  # 留10根余量
+    total = len(st.session_state.chart_df)
+    max_start = max(0, total - st.session_state.display_count - 10)
     if max_start > 0:
-        new_start = random.randint(0, max_start)
-        st.session_state.display_start = new_start
+        st.session_state.display_start = random.randint(0, max_start)
         reset_skill_states()
         st.rerun()
 
-# ====== 显示K线图 ======
+# ====== 显示图表 ======
 if st.session_state.chart_df is not None:
     df = st.session_state.chart_df
     display_start = st.session_state.display_start
-    display_end = min(display_start + BARS_TO_SHOW, len(df))
+    display_count = st.session_state.display_count
+    display_end = min(display_start + display_count, len(df))
     
-    fig = plot_chart(df, display_start, BARS_TO_SHOW)
+    fig = plot_chart(df, display_start, display_count)
     st.plotly_chart(fig, use_container_width=True, key="main_chart")
     
-    # 显示当前数据范围
-    st.caption(
-        f"显示 K{display_start} ~ K{display_end - 1} / 共 {len(df)} 根K线 "
-        f"| 周期: {sel_period} | 品种: {sel_symbol}"
-    )
+    st.caption(f"显示 K{display_start} ~ K{display_end - 1} / 共 {len(df)} 根K线 | {sel_period} | {sel_symbol}")
     
-    # ====== 技能训练区域 ======
     st.markdown("---")
     
+    # ====== 技能训练区域 ======
     if st.session_state.current_skill is None:
         st.info("👈 请先在左侧选择一个训练技能")
     else:
@@ -535,14 +486,11 @@ if st.session_state.chart_df is not None:
         st.markdown(f"### 🎯 当前技能：{skill_name}")
         
         # 显示对话历史
-        dialogue = st.session_state.coach_dialogue
-        for msg in dialogue:
-            role = msg["role"]
-            content = msg["content"]
-            if role == "user":
-                st.markdown(f"**🧑 你**\n{content}")
-            elif role == "assistant":
-                st.markdown(f"**🤖 教练**\n{content}")
+        for msg in st.session_state.coach_dialogue:
+            if msg["role"] == "user":
+                st.markdown(f"**🧑 你**\n{msg['content']}")
+            elif msg["role"] == "assistant":
+                st.markdown(f"**🤖 教练**\n{msg['content']}")
         
         # 输入区域（最多2轮）
         if rounds_left > 0:
@@ -557,33 +505,26 @@ if st.session_state.chart_df is not None:
                 
                 if submitted and user_text.strip():
                     with st.spinner("AI教练正在分析..."):
-                        market_data = prepare_market_msg(df, display_start, BARS_TO_SHOW)
+                        market_data = prepare_market_msg(df, display_start, display_count)
                         reply = ask_coach(sk, user_text, market_data, st.session_state.reading_profile)
-                        
                         st.session_state.coach_dialogue.append({"role": "user", "content": user_text})
                         st.session_state.coach_dialogue.append({"role": "assistant", "content": reply})
                         st.session_state.skill_rounds[sk] = rounds_used + 1
-                        
                         st.rerun()
         else:
-            st.warning(f"✅ 当前技能（{skill_name}）已完成 {MAX_ROUNDS_PER_SKILL} 轮训练，请选择下一个技能。")
+            st.warning(f"✅ {skill_name} 已完成 {MAX_ROUNDS_PER_SKILL} 轮训练，请选择下一个技能。")
             
-            # 检查是否所有技能都已完成
             all_done = all(st.session_state.skill_rounds.get(sk, 0) >= MAX_ROUNDS_PER_SKILL for sk in skill_keys)
             if all_done:
-                st.success("🎉 所有5个技能训练完成！点击「下一根K线」添加新K线继续训练，或「随机跳转」开始新的训练。")
+                st.success("🎉 所有5个技能训练完成！点击「下一根」或「随机跳转」开始新的训练。")
         
-        # 阅读画像展示（折叠）
+        # 阅读画像
         with st.expander("📊 你的阅读画像", expanded=False):
-            profile = st.session_state.reading_profile
-            for k, v in profile.items():
+            for k, v in st.session_state.reading_profile.items():
                 if v > 0:
-                    bar_len = min(v, 30)
-                    bar = "█" * bar_len
-                    st.markdown(f"{k}: {bar} ({v}次)")
+                    st.markdown(f"{k}: {'█' * min(v, 30)} ({v}次)")
                 else:
                     st.markdown(f"{k}: 暂无记录")
 
-# ====== 页脚 ======
 st.markdown("---")
 st.caption("数据来源: 新浪财经 (akshare) | AI: DeepSeek | Al Brooks 价格行为训练系统 V19")
