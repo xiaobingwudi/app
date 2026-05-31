@@ -567,8 +567,23 @@ def main():
             f"第{st.session_state['skill_round']+1}/2 轮"
         )
 
+    # 新增：图表和下一根按钮放在一起
     with st.container():
-        st.plotly_chart(build_chart(df, bar), use_container_width=True)
+        chart_col, btn_col = st.columns([20, 1])
+        with chart_col:
+            st.plotly_chart(build_chart(df, bar), use_container_width=True)
+        with btn_col:
+            # 垂直居中显示按钮
+            st.markdown("<br>" * 5, unsafe_allow_html=True)
+            if st.button("▶", key="next_bar_btn", help="下一根K线", use_container_width=True):
+                if bar < len(df) - 1:
+                    st.session_state["current_bar"] = bar + 1
+                    st.session_state["_mm_cache"] = {}
+                    st.session_state["skill_round"] = 0
+                    st.session_state["coach_dialogue"] = []
+                    st.rerun()
+            else:
+                st.markdown("<br>", unsafe_allow_html=True)
 
     with st.container():
         st.markdown("### 教练")
