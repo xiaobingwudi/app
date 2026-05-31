@@ -384,6 +384,17 @@ def _do_load(sym_code, sym_main, period="30"):
             time.sleep(0.3)
             st.rerun()
 
+def next_bar_callback():
+    """下一根按钮的回调函数"""
+    if st.session_state.get("chart_df") is not None:
+        df = st.session_state["chart_df"]
+        current_bar = st.session_state.get("current_bar", 0)
+        if current_bar < len(df) - 1:
+            st.session_state["current_bar"] = current_bar + 1
+            st.session_state["_mm_cache"] = {}
+            st.session_state["skill_round"] = 0
+            st.session_state["coach_dialogue"] = []
+
 def main():
     st.set_page_config(page_title="Al Brooks 结构训练器", layout="wide")
 
@@ -567,24 +578,15 @@ def main():
             f"第{st.session_state['skill_round']+1}/2 轮"
         )
 
-    # 修改：图表和下一根按钮放在一起
-    with st.container():
-        # 创建三列，左右留白，中间放图表，按钮覆盖在图表右侧
-        chart_col, btn_col = st.columns([0.95, 0.05])
-        with chart_col:
-            st.plotly_chart(build_chart(df, bar), use_container_width=True, key=f"chart_{bar}")
-        with btn_col:
-            # 用一些空行让按钮垂直居中
-            for _ in range(10):
-                st.markdown("")
-            # 使用callback方式确保按钮点击有效
-            if st.button("▶", key="next_bar_btn", help="下一根K线", use_container_width=True):
-                if bar < len(df) - 1:
-                    st.session_state["current_bar"] = bar + 1
-                    st.session_state["_mm_cache"] = {}
-                    st.session_state["skill_round"] = 0
-                    st.session_state["coach_dialogue"] = []
-                    st.rerun()
+    # 修改：图表和下一根按钮
+    st.plotly_chart(build_chart(df, bar), use_container_width=True, key=f"chart_{bar}")
+    
+    # 下一根按钮 - 使用回调函数
+    if st.button("▶ 下一根", key="next_bar_btn", on_click=next_bar_callback, use_container_width=True):
+        pass  # 回调函数已经处理了逻辑
+    
+    # 显示当前K线位置信息
+    st.caption(f"当前K线: {bar} / {len(df)-1}")
 
     with st.container():
         st.markdown("### 教练")
