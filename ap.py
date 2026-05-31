@@ -5,14 +5,13 @@ Al Brooks 结构训练器 V19
 1. chart_df 加载后固定，AI 点评不改变图表
 2. 每个技能最多 2 轮输入，完成后输入框禁用
 3. 点击"下一根"或"随机跳转"才移动图表
-4. 修复数据加载空 DataFrame 错误
+4. 修复数据加载：正确获取主力合约代码
 """
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import akshare as ak
-from datetime import datetime, timedelta
 import random
 import json
 
@@ -37,7 +36,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ====== Session State 初始化 ======
+# ====== Session State ======
 defaults = {
     "chart_df": None,
     "display_start": 0,
@@ -89,111 +88,95 @@ SKILL_PROMPTS = {
 - 趋势方向（上升/下降/震荡）
 - 高低点序列（HH/HL/LH/LL）
 - 通道/节奏（陡峭/平缓/无）
-
-【禁止词汇】
-买、卖、做多、做空、进场、止损、开仓、平仓
-
-【允许讨论】
-趋势、区间、高低点、通道、节奏、动能、延续
-
-请对用户的观察进行点评和补充。""",
+【禁止词汇】买、卖、做多、做空、进场、止损、开仓、平仓
+【允许讨论】趋势、区间、高低点、通道、节奏、动能、延续""",
 
     "skill_2": """## 技能：控制权识别
 你的任务是分析最近3-5根K线，判断谁在控制市场。
-
-【禁止词汇】
-趋势、结构、预测、未来、方向、做多、做空、买、卖
-
-【允许讨论】
-最近3-5根K线、推动、压制、买方力量、卖方力量、谁在主导、突破、失败
-
-请对用户的观察进行点评和补充。""",
+【禁止词汇】趋势、结构、预测、未来、方向、做多、做空、买、卖
+【允许讨论】最近3-5根K线、推动、压制、买方力量、卖方力量、谁在主导、突破、失败""",
 
     "skill_3": """## 技能：推进质量
-你的任务是分析K线的推进质量。关注：
-- 实体大小（BodyRatio）
-- 收盘位置（CloseLocation）
-- 影线长度
-- 与前一根重叠程度（OverlapRatio）
-- 成交量确认（VolRatio）
-
-【禁止词汇】
-趋势、方向、买卖、进场、止损、做多、做空
-
-【允许讨论】
-实体、重叠、影线、收盘位置、成交量、跟进、失败、突破质量
-
-请对用户的观察进行点评和补充。""",
+你的任务是分析K线的推进质量。关注：实体大小(BodyRatio)、收盘位置(CloseLocation)、影线长度、与前一根重叠(OverlapRatio)、成交量(VolRatio)
+【禁止词汇】趋势、方向、买卖、进场、止损、做多、做空
+【允许讨论】实体、重叠、影线、收盘位置、成交量、跟进、失败、突破质量""",
 
     "skill_4": """## 技能：回调vs转换
 你的任务是判断当前走势是回调还是转换。
-
-【禁止词汇】
-大趋势、方向、买卖、进场、止损
-
-【允许讨论】
-回调深度、反弹高度、重叠程度、突破确认、失败信号、跟随、反转
-
-请对用户的观察进行点评和补充。""",
+【禁止词汇】大趋势、方向、买卖、进场、止损
+【允许讨论】回调深度、反弹高度、重叠程度、突破确认、失败信号、跟随、反转""",
 
     "skill_5": """## 技能：市场接受度
 你的任务是分析市场对价格行为的接受程度。
-
-【禁止词汇】
-趋势、买卖、做多、做空、进场、止损、开仓
-
-【允许讨论】
-接受、拒绝、测试、突破失败、跟随、跟进力量、拒绝信号、失败突破
-
-请对用户的观察进行点评和补充。""",
+【禁止词汇】趋势、买卖、做多、做空、进场、止损、开仓
+【允许讨论】接受、拒绝、测试、突破失败、跟随、跟进力量、拒绝信号、失败突破""",
 }
 
 MAX_ROUNDS_PER_SKILL = 2
 
-# ====== 数据加载 ======
+# ====== 数据加载（修复版） ======
+def get_contract(symbol_key):
+    """获取主力合约代码"""
+    try:
+        code = SYMBOLS[symbol_key]
+        exchange = EXCHANGES[code]
+        match = ak.match_main_contract(exchange)
+        for _, row in match.iterrows():
+            if str(row["代码"]).upper() == code.upper():
+                return str(row["主力合约"])
+        return f"{exchange}{code}"
+    except:
+        return None
+
 def load_data(symbol_key, period_key):
     """加载品种数据"""
     try:
-        code = SYMBOLS[symbol_key]
         period = PERIODS[period_key]
-        exchange = EXCHANGES[code]
         
         if period == "D":
+            # 日线数据
+            code = SYMBOLS[symbol_key]
+            exchange = EXCHANGES[code]
             raw = ak.futures_zh_daily_sina(symbol=f"{exchange}{code}")
+            if raw is None or raw.empty:
+                return None
+            df = raw.copy()
+            # 重命名列
+            col_map = {}
+            for c in df.columns:
+                cl = str(c).lower().strip()
+                if cl in ("date", "日期", "交易日"): col_map[c] = "time"
+                elif cl in ("open", "开盘"): col_map[c] = "o"
+                elif cl in ("high", "最高"): col_map[c] = "h"
+                elif cl in ("low", "最低"): col_map[c] = "l"
+                elif cl in ("close", "收盘"): col_map[c] = "c"
+                elif cl in ("volume", "成交量", "vol"): col_map[c] = "v"
+            df = df.rename(columns=col_map)
         else:
-            raw = ak.futures_zh_minute_sina(symbol=f"{exchange}{code}", period=period)
-        
-        if raw is None or raw.empty:
-            return None
-        
-        df = raw.copy()
-        
-        # 列名映射：逐列判断，避免列数不匹配错误
-        col_map = {}
-        for c in df.columns:
-            cl = str(c).lower().strip()
-            if cl in ("date", "日期", "交易日", "day", "datetime", "时间"):
-                col_map[c] = "time"
-            elif cl in ("open", "开盘", "o"):
-                col_map[c] = "o"
-            elif cl in ("high", "最高", "h"):
-                col_map[c] = "h"
-            elif cl in ("low", "最低", "l"):
-                col_map[c] = "l"
-            elif cl in ("close", "收盘", "c"):
-                col_map[c] = "c"
-            elif cl in ("volume", "成交量", "vol", "v", "持仓量"):
-                col_map[c] = "v"
-            else:
-                col_map[c] = c  # 保持原名
-        
-        df = df.rename(columns=col_map)
+            # 分钟数据：需要具体的合约代码
+            contract = get_contract(symbol_key)
+            if not contract:
+                return None
+            raw = ak.futures_zh_minute_sina(symbol=contract, period=period)
+            if raw is None or raw.empty:
+                return None
+            df = raw.copy()
+            # 重命名列
+            col_map = {}
+            for c in df.columns:
+                cl = str(c).lower().strip()
+                if cl in ("date", "日期", "day", "datetime", "时间"): col_map[c] = "time"
+                elif cl in ("open", "开盘", "o"): col_map[c] = "o"
+                elif cl in ("high", "最高", "h"): col_map[c] = "h"
+                elif cl in ("low", "最低", "l"): col_map[c] = "l"
+                elif cl in ("close", "收盘", "c"): col_map[c] = "c"
+                elif cl in ("volume", "成交量", "vol", "v", "持仓量"): col_map[c] = "v"
+            df = df.rename(columns=col_map)
         
         # 检查必要列
         for col in ["o", "h", "l", "c"]:
             if col not in df.columns:
                 return None
-        
         if "time" not in df.columns:
             df["time"] = range(len(df))
         if "v" not in df.columns:
@@ -256,31 +239,28 @@ def prepare_market_msg(df, display_start, display_count):
 def ask_coach(skill_key, user_input, market_data_str, reading_profile):
     api_key = st.secrets.get("OPENAI_API_KEY", "")
     if not api_key:
-        return "错误：API Key 未配置。请在 Streamlit Cloud 后台设置 OPENAI_API_KEY。"
+        return "错误：API Key 未配置。"
     
     from openai import OpenAI
     client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
     
     profile_str = "\n".join([f"- {k}: {v}次" for k, v in reading_profile.items() if v > 0])
-    profile_hint = f"\n\n【用户阅读画像（薄弱点追踪）】\n{profile_str}\n请根据画像针对性地训练用户。" if profile_str else ""
+    profile_hint = f"\n\n【用户阅读画像】\n{profile_str}\n请根据画像针对性地训练用户。" if profile_str else ""
     
-    system_prompt = f"""你是Al Brooks价格行为训练教练。你的任务是引导用户观察市场行为，而不是直接给答案。
+    system_prompt = f"""你是Al Brooks价格行为训练教练。引导用户观察，不直接给答案。
 
 {SKILL_PROMPTS.get(skill_key, '')}
 
 【规则】
-1. 先点评用户的观察（是否正确、遗漏了什么）
-2. 再补充你的分析，但不要提前告诉用户结论
-3. 用提问引导用户自己发现关键特征
-4. 每轮点评控制在200字以内
-5. 不使用"大阳线""放量""缩量"等传统标签
-6. 使用客观数据（BodyRatio、CloseLocation等）
+1. 先点评用户观察是否正确、遗漏了什么
+2. 再补充分析，用提问引导
+3. 每轮200字以内
+4. 不使用"大阳线""放量"等传统标签
+5. 用客观数据(BodyRatio/CloseLocation等)
 {profile_hint}
 
-【当前市场数据（系统自动生成，非用户发言）】
-{market_data_str}
-
-请基于以上数据对用户的观察进行点评。"""
+【市场数据（系统自动生成）】
+{market_data_str}"""
 
     try:
         resp = client.chat.completions.create(
@@ -342,7 +322,7 @@ def reset_skill_states():
     st.session_state.skill_rounds = {}
     st.session_state.coach_dialogue = []
 
-# ====== 侧边栏（与V18一致） ======
+# ====== 侧边栏 ======
 with st.sidebar:
     st.markdown("### ⚙️ 控制面板")
     
@@ -401,6 +381,7 @@ with st.sidebar:
             ds = st.session_state.data_source
             st.caption(f"品种: {ds.get('symbol', '-')}")
             st.caption(f"周期: {ds.get('period', '-')}")
+            st.caption(f"合约: {ds.get('contract', '-')}")
             st.caption(f"交易所: {ds.get('exchange', '-')}")
             st.caption(f"总K线数: {ds.get('total_bars', 0)}")
             st.caption(f"时间范围: {ds.get('time_range', '-')}")
@@ -412,7 +393,6 @@ st.title("Al Brooks 价格行为结构训练器 V19")
 df = st.session_state.chart_df
 
 if df is None:
-    # 首次加载
     with st.spinner("正在加载数据..."):
         df = load_data(sel_symbol, sel_period)
         if df is not None:
@@ -420,10 +400,11 @@ if df is None:
             st.session_state.total_bars = len(df)
             st.session_state.display_count = num_bars
             st.session_state.display_start = min(start_offset, max(0, len(df) - num_bars))
+            contract = get_contract(sel_symbol) if sel_period != "日线" else f"{EXCHANGES[SYMBOLS[sel_symbol]]}{SYMBOLS[sel_symbol]}"
             exchange_name = EXCHANGE_NAMES.get(EXCHANGES.get(SYMBOLS.get(sel_symbol, ""), ""), "")
             tr = f"{df.iloc[0]['time']} ~ {df.iloc[-1]['time']}" if "time" in df.columns else "-"
             st.session_state.data_source = {
-                "symbol": sel_symbol, "period": sel_period,
+                "symbol": sel_symbol, "period": sel_period, "contract": contract or "-",
                 "exchange": exchange_name, "total_bars": len(df), "time_range": tr,
             }
             reset_skill_states()
@@ -432,7 +413,6 @@ if df is None:
             st.error("数据加载失败，请尝试其他品种或周期")
 
 elif st.session_state.reload_data_flag:
-    # 重载数据（重新从接口拉取）
     st.session_state.reload_data_flag = False
     with st.spinner("正在重载数据..."):
         df = load_data(sel_symbol, sel_period)
@@ -441,17 +421,17 @@ elif st.session_state.reload_data_flag:
             st.session_state.total_bars = len(df)
             st.session_state.display_count = num_bars
             st.session_state.display_start = 0
+            contract = get_contract(sel_symbol) if sel_period != "日线" else f"{EXCHANGES[SYMBOLS[sel_symbol]]}{SYMBOLS[sel_symbol]}"
             exchange_name = EXCHANGE_NAMES.get(EXCHANGES.get(SYMBOLS.get(sel_symbol, ""), ""), "")
             tr = f"{df.iloc[0]['time']} ~ {df.iloc[-1]['time']}" if "time" in df.columns else "-"
             st.session_state.data_source = {
-                "symbol": sel_symbol, "period": sel_period,
+                "symbol": sel_symbol, "period": sel_period, "contract": contract or "-",
                 "exchange": exchange_name, "total_bars": len(df), "time_range": tr,
             }
             reset_skill_states()
             st.rerun()
 
 elif st.session_state.random_jump_flag:
-    # 随机跳转（同一数据内随机位置）
     st.session_state.random_jump_flag = False
     total = len(st.session_state.chart_df)
     max_start = max(0, total - st.session_state.display_count - 10)
@@ -474,7 +454,6 @@ if st.session_state.chart_df is not None:
     
     st.markdown("---")
     
-    # ====== 技能训练区域 ======
     if st.session_state.current_skill is None:
         st.info("👈 请先在左侧选择一个训练技能")
     else:
@@ -485,14 +464,12 @@ if st.session_state.chart_df is not None:
         
         st.markdown(f"### 🎯 当前技能：{skill_name}")
         
-        # 显示对话历史
         for msg in st.session_state.coach_dialogue:
             if msg["role"] == "user":
                 st.markdown(f"**🧑 你**\n{msg['content']}")
             elif msg["role"] == "assistant":
                 st.markdown(f"**🤖 教练**\n{msg['content']}")
         
-        # 输入区域（最多2轮）
         if rounds_left > 0:
             with st.form(key=f"input_form_{sk}", clear_on_submit=True):
                 user_text = st.text_area(
@@ -513,12 +490,9 @@ if st.session_state.chart_df is not None:
                         st.rerun()
         else:
             st.warning(f"✅ {skill_name} 已完成 {MAX_ROUNDS_PER_SKILL} 轮训练，请选择下一个技能。")
-            
-            all_done = all(st.session_state.skill_rounds.get(sk, 0) >= MAX_ROUNDS_PER_SKILL for sk in skill_keys)
-            if all_done:
-                st.success("🎉 所有5个技能训练完成！点击「下一根」或「随机跳转」开始新的训练。")
+            if all(st.session_state.skill_rounds.get(sk, 0) >= MAX_ROUNDS_PER_SKILL for sk in skill_keys):
+                st.success("🎉 全部技能完成！点击「下一根」或「随机跳转」开始新的训练。")
         
-        # 阅读画像
         with st.expander("📊 你的阅读画像", expanded=False):
             for k, v in st.session_state.reading_profile.items():
                 if v > 0:
