@@ -74,7 +74,64 @@ SKILL_CONSTRAINTS = {
         "desc": "只关注价格突破后的市场反应，禁止交易建议。允许使用结构位词汇。"
     }
 }
-
+# ==================== 技能合格回答标准定义（新增）====================
+# 功能：定义每个技能必须包含的观察维度，用于生成输入框提示和判断回答质量
+SKILL_QUALITY_STANDARDS = {
+    1: {
+        "name": "背景阅读",
+        "must_contain": [
+            "高低点序列：是HH/HL（上升）还是LH/LL（下降）？",
+            "区间/通道边界：具体数值是多少？",
+            "当前价格在结构中的位置：接近上沿/下沿/中间？"
+        ],
+        "reject_if_only": ["上升趋势", "下降趋势", "震荡"],
+        "placeholder": "请观察以下维度：\n1. 高低点序列是HH/HL还是LH/LL？\n2. 区间/通道边界在哪个价格区域？\n3. 当前价格在结构中的什么位置？"
+    },
+    2: {
+        "name": "控制权识别",
+        "must_contain": [
+            "最近3-5根K线，谁在主动推进？",
+            "推进方的K线实体质量如何？",
+            "对手方有没有反击？反击的K线特征是什么？",
+            "反击是否得到后续跟进？"
+        ],
+        "reject_if_only": ["多头控制", "空头控制"],
+        "placeholder": "请观察以下维度：\n1. 最近3-5根K线，谁在主动推进？\n2. 推进方的实体占波幅多少？收盘位置在哪里？\n3. 对手方有没有反击？反击的K线特征是什么？\n4. 反击是否得到后续跟进？"
+    },
+    3: {
+        "name": "推进质量",
+        "must_contain": [
+            "连续K线的实体大小变化：放大还是缩小？",
+            "K线之间的重叠程度：紧密重叠还是有跳空？",
+            "影线特征：有无长上/下影线？",
+            "收盘位置：高位/中位/低位？"
+        ],
+        "reject_if_only": ["推进很强", "推进很弱"],
+        "placeholder": "请观察以下维度：\n1. 连续K线的实体大小是放大还是缩小？\n2. K线之间是紧密重叠还是有跳空？\n3. 有无长上/下影线？\n4. 收盘位置在高位、中位还是低位？"
+    },
+    4: {
+        "name": "回调vs转换",
+        "must_contain": [
+            "回调/反向运动持续了几根K线？",
+            "回调K线的实体大小：是弱回调还是强反向？",
+            "是否触及或突破了关键结构位？",
+            "原方向方是否有立即的反击？"
+        ],
+        "reject_if_only": ["这是回调", "这是转换"],
+        "placeholder": "请观察以下维度：\n1. 回调/反向运动持续了几根K线？\n2. 回调K线的实体强弱如何？\n3. 是否触及或突破了关键结构位？\n4. 原方向方是否有立即的反击？"
+    },
+    5: {
+        "name": "市场接受",
+        "must_contain": [
+            "突破后价格停留了几根K线？",
+            "是否被立即推回结构内？",
+            "推回后是否继续向突破方向推进？",
+            "突破后的K线实体特征：有无跟进？"
+        ],
+        "reject_if_only": ["市场接受了", "市场没接受"],
+        "placeholder": "请观察以下维度：\n1. 突破后价格停留了几根K线？\n2. 是否被立即推回结构内？\n3. 推回后是否继续向突破方向推进？\n4. 突破后的K线实体特征如何？"
+    }
+}
 # ==================== AI系统提示词模板 ====================
 # 功能：定义AI教练的角色、职责和约束
 # 细节：强调“参考答案”而非“标准答案”，分两轮执行训练流程
@@ -100,16 +157,24 @@ AI_SYSTEM_PROMPT_TEMPLATE = """你是 Al Brooks 价格行为训练教练。
 【当前技能的语言约束 - 必须遵守】
 {skill_constraints}
 
+【当前技能的合格回答标准 - 必须严格执行】
+{quality_standards}
+
+用户回答必须包含上述 must_contain 中的所有维度。
+如果用户只给出结论性判断（如 {reject_keywords}），视为无效回答。
+你需要提示：请观察具体K线，按照合格回答标准中的维度逐一描述你的观察。
+
 【用户阅读画像 - 了解用户的薄弱点】
 {reading_profile_text}
 
 【训练流程 - 严格执行】
 
 第1轮（用户首次作答）：
-- 检查用户的回答是否触及该技能的核心观察维度
+- 检查用户的回答是否包含【合格回答标准】中必须包含的所有维度
 - 检查用户是否使用了禁止词汇（见上面的语言约束），如有则提醒
-- 如果到位：说"好的，我明白了"，然后直接进入第2轮流程
-- 如果不到位：给一次提示，只指向用户遗漏的具体维度，**绝对不给答案**
+- 检查用户是否只给出结论性判断（如 {reject_keywords}）
+- 如果全部维度都已覆盖：说"好的，我明白了"，然后直接进入第2轮流程
+- 如果缺少任一维度：给一次提示，只指向用户遗漏的具体维度，**绝对不给答案**
 
 第2轮（用户二次作答）：
 无论用户答得如何，执行以下两步：
@@ -412,11 +477,23 @@ def _gpt(messages):
 # 细节：列出允许的分析维度和禁止的词汇
 def _build_skill_constraints_text(skill_id):
     sk = SKILL_CONSTRAINTS[skill_id]
+    std = SKILL_QUALITY_STANDARDS[skill_id]
     forbidden = "、".join(sk["forbidden"])
+    reject_keywords = "、".join(std["reject_if_only"])
+    must_list = "\n  - ".join(std["must_contain"])
+    
     return f"""{sk['desc']}
+
+【必须包含的观察维度】（缺一不可）：
+  - {must_list}
+
+【结论性判断】（视为无效回答）：
+  {reject_keywords}
+
 允许使用的分析维度：{sk['allowed']}
 绝对禁止使用的词汇：{forbidden}
-如果用户的回答中包含禁止词汇，在点评时必须指出。"""
+如果用户的回答中缺少任何必须维度，在点评时必须指出。
+如果用户只给出结论性判断，必须要求其补充具体观察。"""
 
 # ==================== 构建用户阅读画像文本 ====================
 # 功能：将历史训练中积累的薄弱点转换为提示词文本
@@ -442,10 +519,18 @@ def ask_coach(chart_df, bar, skill_name, skill_id, dialogue, level=1, is_second_
     constraints = _build_skill_constraints_text(skill_id)
     profile_text = _build_reading_profile_text()
     
+    std = SKILL_QUALITY_STANDARDS[skill_id]
+    reject_keywords = "、".join(std["reject_if_only"])
+    
     sp = AI_SYSTEM_PROMPT_TEMPLATE.format(
-        skill_name=skill_name, level_name=lv["name"], level_desc=lv["desc"],
+        skill_name=skill_name, 
+        level_name=lv["name"], 
+        level_desc=lv["desc"],
         skill_question=SKILL_CONSTRAINTS[skill_id]["question"],
-        skill_constraints=constraints, reading_profile_text=profile_text
+        skill_constraints=constraints,
+        quality_standards=f"必须包含维度: {', '.join(std['must_contain'])}",
+        reject_keywords=reject_keywords,
+        reading_profile_text=profile_text
     )
     sp += "\n\n" + _market_msg(chart_df, bar, skill_name)
     
@@ -803,19 +888,24 @@ def main():
                 st.markdown(f"**{'🧑 你' if m['role']=='user' else '🤖 教练'}**")
                 st.markdown(m["content"])
 
-        # 用户输入
-        s = st.session_state
-        can_input = s.get("skill_round", 0) < 2 and s.get("chart_df") is not None
-        
-        if can_input:
-            prompt = st.chat_input("分享你对当前行情的观察...")
-        else:
-            if s.get("skill_round", 0) >= 2:
-                st.info("本项技能训练结束，点击上方技能按钮切换下一项继续训练。")
-            prompt = None
+       # 用户输入 - 带动态提示的输入框
+s = st.session_state
+can_input = s.get("skill_round", 0) < 2 and s.get("chart_df") is not None
 
-        if prompt:
-            _send(prompt, df, bar, active_skill)
+if can_input:
+    # 获取当前技能的提示文本
+    current_skill_id = s.get("train_mode", 1)
+    current_skill_std = SKILL_QUALITY_STANDARDS[current_skill_id]
+    placeholder_text = current_skill_std["placeholder"]
+    
+    prompt = st.chat_input(placeholder=placeholder_text)
+    
+    if prompt:
+        _send(prompt, df, bar, active_skill)
+else:
+    if s.get("skill_round", 0) >= 2:
+        st.info("本项技能训练结束，点击上方技能按钮切换下一项继续训练。")
+    prompt = None
 
 
 if __name__ == "__main__":
