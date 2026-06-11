@@ -1,10 +1,15 @@
 """
-Al Brooks 日内机会寻找训练器 V6.0
-核心目标：训练用户在不知道未来的情况下，持续更新对市场控制权的理解
+Al Brooks 日内机会寻找训练器 V7.0
+核心目标：训练用户不断重复四句话——
+1. 我观察到了什么？
+2. 我如何解释这些证据？
+3. 我的置信度是多少？
+4. 什么新证据会让我改变看法？
 
-两种模式：
-1. 读盘模式（90%）：逐段开放K线，每段判断控制权，新证据出现后修正
-2. 故事模式（10%）：完整80根K线，自由讲述，AI随机挑战
+三个阶段：
+1. 事件驱动读盘（95%）：事件触发开放，记录观察、解释、置信度、反证条件
+2. 观点演化复盘（自动）：生成观点演化图
+3. Brooks总结（5%）：最后才问"今天是什么样的一天"
 """
 
 import streamlit as st
@@ -17,6 +22,7 @@ from openai import OpenAI
 import random
 import time
 import re
+from datetime import datetime
 
 # ==================== 配置 ====================
 SYMBOL_NAMES = {
@@ -39,147 +45,195 @@ EXCHANGES = {
     "能源": ["SC", "FU"],
 }
 
-# 读盘模式分段节点（从K20开始，每10-20根开放一段）
-READING_SEGMENTS = [20, 35, 50, 65, 80]
-
-# AI挑战问题池（随机抽取，防止模板化）
-CHALLENGE_QUESTIONS = {
-    "evidence": [
-        "哪根K线最支持你的观点？",
-        "如果删掉这3根K线，你还会这么看吗？",
-        "你看到的证据是背景信号还是入场信号？",
-        "哪一段的成交量最支持你的判断？"
-    ],
-    "control": [
-        "谁真正掌控市场？多头还是空头？",
-        "控制权在什么时候发生了变化？",
-        "有没有你误判控制权的地方？",
-        "当前是趋势市还是震荡市？"
-    ],
-    "counter": [
-        "什么情况会推翻你的故事？",
-        "哪个证据与你的判断矛盾？",
-        "有没有忽略失败一方的信号？",
-        "如果最不利的情况发生，你准备怎么办？"
-    ],
-    "trade": [
-        "如果必须做一笔，只做哪一笔？",
-        "哪笔看起来最好但实际最危险？",
-        "什么时候应该放弃等待？",
-        "当前风险回报比大约是多少？"
-    ]
-}
-
+# 事件类型定义（触发暂停的关键事件）
+KEY_EVENTS = [
+    "连续3根同向K线",
+    "大K线（实体>80%波幅）",
+    "突破前高/前低",
+    "失败突破",
+    "双顶/双底形成",
+    "趋势线被刺穿",
+    "外包/内包K线",
+    "成交量异常放大",
+    "窄幅横盘（连续3根小K线）",
+    "反转K线（长影线）"
+]
 
 # ==================== AI 提示词 ====================
-READING_MODE_SYSTEM = """你是 Al Brooks 价格行为教练。
+OBSERVATION_SYSTEM = """你是 Al Brooks 价格行为教练。
 
-【当前模式】读盘模式
-用户正在逐段看到K线，他不知道后面会发生什么。
-你的任务是：挑战用户对当前市场控制权的判断。
+【当前模式】事件驱动读盘
+用户刚刚看到一段新的K线，触发了关键事件。
 
-【输出格式】
-- 不要说"对"或"错"
-- 只问一个问题（从以下类别中随机选择）
-- 控制在80字以内
-
-【问题池】
-证据类：{evidence_q}
-控制权类：{control_q}
-反证类：{counter_q}
-"""
-
-STORY_MODE_SYSTEM = """你是 Al Brooks 价格行为教练。
-
-【当前模式】故事模式
-用户已经看完了完整的80根K线。
-他正在自由讲述今天的故事。
-你的任务是：随机选一个问题挑战他。
+你的任务是：引导用户完成四步思考，不要替他下结论。
 
 【输出格式】
-- 不要说"对"或"错"
-- 只问一个问题
-- 控制在100字以内
+请依次问这四个问题（每问一行）：
+1. 你观察到了什么？（请引用具体K线特征）
+2. 你如何解释这些证据？（市场在告诉你什么？）
+3. 你现在的置信度是多少？（0-100%）
+4. 什么新证据会让你改变这个看法？
 
-【问题池】
-{questions}
+【事件信息】
+触发事件：{event}
+K线范围：K{start} ~ K{end}
+"""
+
+CHALLENGE_SYSTEM = """你是 Al Brooks 价格行为教练。
+
+用户已经给出了他的观察和解释。你的任务是：挑战他的思考，而不是判断对错。
+
+【输出格式】
+请从以下角度选1-2个提问：
+- 有没有相反的证据？
+- 这个解释还有其他可能性吗？
+- 如果市场现在反转，你会怎么调整？
+- 你的置信度基于哪些具体K线？
+
+控制在80字以内。
+
+【用户当前回答】
+{user_answer}
+"""
+
+SUMMARY_SYSTEM = """你是 Al Brooks 价格行为教练。
+
+用户完成了整个读盘训练。请帮他总结今天的故事。
+
+【输出格式】
+用3-5句话总结：
+1. 今天故事的主要演变过程
+2. 用户观点修正的关键节点
+3. 最终的市场理解
+
+【观点演化记录】
+{evolution_log}
 """
 
 
-def get_random_question(category=None):
-    """随机获取一个问题"""
-    if category and category in CHALLENGE_QUESTIONS:
-        return random.choice(CHALLENGE_QUESTIONS[category])
-    all_questions = []
-    for q_list in CHALLENGE_QUESTIONS.values():
-        all_questions.extend(q_list)
-    return random.choice(all_questions)
-
-
-def call_reading_mode_challenge(user_story, segment_start, segment_end):
-    """读盘模式：AI挑战"""
+def call_observation_guide(event, start, end):
+    """引导用户完成四步思考"""
     api_key = st.secrets.get("OPENAI_API_KEY", "")
     base_url = st.secrets.get("OPENAI_BASE_URL", "https://api.deepseek.com")
     model = st.secrets.get("OPENAI_MODEL", "deepseek-chat")
     
     if not api_key:
-        return "【提示】请配置API密钥"
+        return "请回答：\n1. 你观察到了什么？\n2. 你如何解释？\n3. 置信度？\n4. 什么会让你改变看法？"
     
-    # 随机选择一个问题类别
-    categories = list(CHALLENGE_QUESTIONS.keys())
-    chosen_cat = random.choice(categories)
-    chosen_q = random.choice(CHALLENGE_QUESTIONS[chosen_cat])
-    
-    system = READING_MODE_SYSTEM.format(
-        evidence_q=random.choice(CHALLENGE_QUESTIONS["evidence"]),
-        control_q=random.choice(CHALLENGE_QUESTIONS["control"]),
-        counter_q=random.choice(CHALLENGE_QUESTIONS["counter"])
-    )
-    
-    messages = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": f"【K线范围】K{segment_start} ~ K{segment_end}\n【用户判断】{user_story}"}
-    ]
+    system = OBSERVATION_SYSTEM.format(event=event, start=start, end=end)
     
     try:
         client = OpenAI(base_url=base_url, api_key=api_key)
         resp = client.chat.completions.create(
-            model=model, messages=messages, temperature=0.5, max_tokens=150
+            model=model, messages=[{"role": "system", "content": system}],
+            temperature=0.5, max_tokens=200
         )
         return resp.choices[0].message.content
     except Exception as e:
-        return f"AI: 你注意到控制权变化了吗？ (API错误: {str(e)[:50]})"
+        return f"请思考这四个问题：\n1. 观察到了什么？\n2. 如何解释？\n3. 置信度？\n4. 什么会让你改变看法？\n(API: {str(e)[:50]})"
 
 
-def call_story_mode_challenge(user_story):
-    """故事模式：AI随机挑战"""
+def call_challenge(user_answer):
+    """挑战用户的思考"""
     api_key = st.secrets.get("OPENAI_API_KEY", "")
     base_url = st.secrets.get("OPENAI_BASE_URL", "https://api.deepseek.com")
     model = st.secrets.get("OPENAI_MODEL", "deepseek-chat")
     
     if not api_key:
-        return "【提示】请配置API密钥"
+        return "有没有相反的证据？还有其他可能性吗？"
     
-    all_questions = []
-    for q_list in CHALLENGE_QUESTIONS.values():
-        all_questions.extend(q_list)
-    random_q = random.choice(all_questions)
-    
-    system = STORY_MODE_SYSTEM.format(questions="\n".join(all_questions))
-    
-    messages = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": f"【用户的故事】{user_story}\n\n请用这个问题挑战他：{random_q}"}
-    ]
+    system = CHALLENGE_SYSTEM.format(user_answer=user_answer[:500])
     
     try:
         client = OpenAI(base_url=base_url, api_key=api_key)
         resp = client.chat.completions.create(
-            model=model, messages=messages, temperature=0.5, max_tokens=200
+            model=model, messages=[{"role": "system", "content": system}],
+            temperature=0.5, max_tokens=150
         )
         return resp.choices[0].message.content
     except Exception as e:
-        return f"AI: {random_q} (API错误: {str(e)[:50]})"
+        return "有没有相反的证据？还有其他解释吗？"
+
+
+def call_summary(evolution_log):
+    """生成最终总结"""
+    api_key = st.secrets.get("OPENAI_API_KEY", "")
+    base_url = st.secrets.get("OPENAI_BASE_URL", "https://api.deepseek.com")
+    model = st.secrets.get("OPENAI_MODEL", "deepseek-chat")
+    
+    if not api_key or not evolution_log:
+        return "完成训练后，系统将自动生成今天的故事总结。"
+    
+    system = SUMMARY_SYSTEM.format(evolution_log=evolution_log[:1500])
+    
+    try:
+        client = OpenAI(base_url=base_url, api_key=api_key)
+        resp = client.chat.completions.create(
+            model=model, messages=[{"role": "system", "content": system}],
+            temperature=0.5, max_tokens=300
+        )
+        return resp.choices[0].message.content
+    except Exception as e:
+        return "今天的故事总结将在这里显示。"
+
+
+# ==================== 事件检测 ====================
+def detect_events(df, start_idx, end_idx):
+    """
+    检测K线范围内是否发生关键事件
+    返回：触发的事件名称，如果没有则返回None
+    """
+    if end_idx - start_idx < 3:
+        return None
+    
+    sub = df.iloc[start_idx:end_idx+1]
+    n = len(sub)
+    
+    if n < 3:
+        return None
+    
+    # 1. 连续3根同向K线
+    last_3 = sub.iloc[-3:]
+    bull_count = sum(1 for _, row in last_3.iterrows() if row["close"] >= row["open"])
+    if bull_count == 3:
+        return "连续3根多头K线（强势上涨）"
+    if bull_count == 0:
+        return "连续3根空头K线（强势下跌）"
+    
+    # 2. 大K线（实体>80%波幅）
+    last = sub.iloc[-1]
+    body = abs(last["close"] - last["open"])
+    total = last["high"] - last["low"]
+    if total > 0 and body / total > 0.8:
+        direction = "阳线" if last["close"] >= last["open"] else "阴线"
+        return f"大{direction}线（实体占比{body/total*100:.0f}%）"
+    
+    # 3. 突破前高/前低
+    if n >= 5:
+        recent_high = sub.iloc[:-1]["high"].max()
+        recent_low = sub.iloc[:-1]["low"].min()
+        if last["high"] > recent_high:
+            return f"突破近期高点（K{start_idx+end_idx} > 前{min(5, n-1)}根高点）"
+        if last["low"] < recent_low:
+            return f"跌破近期低点（K{start_idx+end_idx} < 前{min(5, n-1)}根低点）"
+    
+    # 4. 内包/外包
+    if n >= 2:
+        prev = sub.iloc[-2]
+        curr = sub.iloc[-1]
+        if curr["high"] < prev["high"] and curr["low"] > prev["low"]:
+            return f"内包线（K{start_idx+end_idx}完全在K{start_idx+end_idx-1}内部）"
+        if curr["high"] > prev["high"] and curr["low"] < prev["low"]:
+            return f"外包线（K{start_idx+end_idx}完全包含K{start_idx+end_idx-1}）"
+    
+    # 5. 窄幅横盘
+    if n >= 3:
+        last_3_range = sub.iloc[-3:]["high"].max() - sub.iloc[-3:]["low"].min()
+        avg_range = sub.iloc[:]["high"].max() - sub.iloc[:]["low"].min() if n > 3 else last_3_range
+        if avg_range > 0 and last_3_range / avg_range < 0.3:
+            return "连续3根小K线（窄幅横盘）"
+    
+    return None
 
 
 # ==================== 数据加载 ====================
@@ -200,7 +254,7 @@ def load_data(symbol, period="30"):
 
 
 # ==================== 图表绘制 ====================
-def build_chart(df, max_bar, show_labels=True):
+def build_chart(df, max_bar, current_end=None):
     """绘制K线图"""
     start = max(0, len(df) - max_bar)
     plot_df = df.iloc[start:].copy().reset_index(drop=True)
@@ -228,81 +282,37 @@ def build_chart(df, max_bar, show_labels=True):
         marker_color=vol_colors, showlegend=False, opacity=0.5
     ), row=2, col=1)
 
-    # 只在需要时显示编号
-    if show_labels:
-        for idx, bar_num in enumerate(bar_numbers):
-            if bar_num % 10 == 0:  # 每10根显示一次
-                row_data = plot_df.iloc[idx]
-                if row_data["close"] >= row_data["open"]:
-                    y_pos = row_data["low"]
-                    y_shift = -22
-                else:
-                    y_pos = row_data["high"]
-                    y_shift = 22
-                fig.add_annotation(
-                    x=idx, y=y_pos,
-                    text=f"K{bar_num}",
-                    showarrow=False,
-                    font=dict(size=9, color="#666666"),
-                    yshift=y_shift,
-                    row=1, col=1
-                )
-
-    fig.update_layout(
-        xaxis_rangeslider_visible=False,
-        height=500,
-        margin=dict(l=10, r=10, t=10, b=10),
-        paper_bgcolor="#ffffff",
-        plot_bgcolor="#f8f9fa",
-        font=dict(color="#212529"),
-    )
-    fig.update_xaxes(showgrid=True, gridcolor="#e9ecef", gridwidth=0.5)
-    fig.update_yaxes(showgrid=True, gridcolor="#e9ecef", gridwidth=0.5)
-    
-    return fig
-
-
-def build_partial_chart(df, max_bar, current_end):
-    """绘制部分K线图（读盘模式）"""
-    start = max(0, len(df) - max_bar)
-    plot_df = df.iloc[start:start+current_end].copy().reset_index(drop=True)
-    n_bars = len(plot_df)
-    bar_numbers = list(range(1, n_bars + 1))
-
-    fig = make_subplots(
-        rows=2, cols=1, shared_xaxes=True,
-        vertical_spacing=0.02, row_heights=[0.8, 0.2]
-    )
-
-    fig.add_trace(go.Candlestick(
-        x=plot_df.index,
-        open=plot_df["open"], high=plot_df["high"],
-        low=plot_df["low"], close=plot_df["close"],
-        showlegend=False,
-        increasing_line_color="#ef5350",
-        decreasing_line_color="#26a69a",
-    ), row=1, col=1)
-
-    vol_colors = ["#ef5350" if c >= o else "#26a69a"
-                  for o, c in zip(plot_df["open"], plot_df["close"])]
-    fig.add_trace(go.Bar(
-        x=plot_df.index, y=plot_df["volume"],
-        marker_color=vol_colors, showlegend=False, opacity=0.5
-    ), row=2, col=1)
-
-    # 标记分段边界
-    for seg in READING_SEGMENTS:
-        if seg <= current_end:
-            fig.add_vline(
-                x=seg - 1, line_dash="dot",
-                line_color="#f9c74f", line_width=1.5, opacity=0.6
-            )
+    # 每10根显示一次编号
+    for idx, bar_num in enumerate(bar_numbers):
+        if bar_num % 10 == 0:
+            row_data = plot_df.iloc[idx]
+            if row_data["close"] >= row_data["open"]:
+                y_pos = row_data["low"]
+                y_shift = -22
+            else:
+                y_pos = row_data["high"]
+                y_shift = 22
             fig.add_annotation(
-                x=seg - 1, y=plot_df.iloc[min(seg-1, n_bars-1)]["high"],
-                text=f"K{seg}", showarrow=False,
-                font=dict(size=8, color="#f9c74f"),
-                yshift=15
+                x=idx, y=y_pos,
+                text=f"K{bar_num}",
+                showarrow=False,
+                font=dict(size=9, color="#666666"),
+                yshift=y_shift,
+                row=1, col=1
             )
+
+    # 标记当前进度
+    if current_end and current_end <= n_bars:
+        fig.add_vline(
+            x=current_end - 1, line_dash="dash",
+            line_color="#ff9800", line_width=2, opacity=0.8
+        )
+        fig.add_annotation(
+            x=current_end - 1, y=plot_df.iloc[min(current_end-1, n_bars-1)]["high"],
+            text=f"← 当前位置", showarrow=False,
+            font=dict(size=10, color="#ff9800"),
+            yshift=15
+        )
 
     fig.update_layout(
         xaxis_rangeslider_visible=False,
@@ -324,13 +334,16 @@ def init_state():
         "df": None,
         "symbol": None,
         "max_bar": 80,
-        "mode": "reading",  # "reading" or "story"
-        "current_segment_idx": 0,
-        "segment_judgments": [],
-        "conversations": [],
+        "current_position": 20,  # 当前K线位置（从20开始）
+        "event_log": [],  # 事件日志
+        "observation_log": [],  # 用户观察日志（观点演化）
+        "conversations": [],  # 当前对话
         "session_complete": False,
         "practice_count": 0,
-        "correction_count": 0,  # 记录观点修正次数
+        "waiting_for_observation": False,
+        "current_event": None,
+        "current_event_start": 0,
+        "current_event_end": 0,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -338,11 +351,15 @@ def init_state():
 
 
 def reset_session():
-    st.session_state.current_segment_idx = 0
-    st.session_state.segment_judgments = []
+    st.session_state.current_position = 20
+    st.session_state.event_log = []
+    st.session_state.observation_log = []
     st.session_state.conversations = []
     st.session_state.session_complete = False
-    st.session_state.correction_count = 0
+    st.session_state.waiting_for_observation = False
+    st.session_state.current_event = None
+    st.session_state.current_event_start = 0
+    st.session_state.current_event_end = 0
 
 
 def load_new_symbol(code, period_value):
@@ -359,28 +376,18 @@ def load_new_symbol(code, period_value):
         return True
 
 
-def check_correction(previous_judgment, current_judgment):
-    """检查用户是否修正了观点"""
-    if not previous_judgment or not current_judgment:
-        return False
-    
-    # 简单判断：控制权描述是否发生变化
-    control_keywords = ["多头", "空头", "震荡", "买方", "卖方", "均衡"]
-    prev_control = None
-    curr_control = None
-    
-    for kw in control_keywords:
-        if kw in previous_judgment:
-            prev_control = kw
-        if kw in current_judgment:
-            curr_control = kw
-    
-    return prev_control != curr_control and prev_control is not None and curr_control is not None
+def advance_to_next_event(df, current_pos, max_bar):
+    """推进到下一个事件位置"""
+    for new_pos in range(current_pos + 1, max_bar + 1):
+        event = detect_events(df, max(0, new_pos - 10), new_pos)
+        if event:
+            return new_pos, event
+    return max_bar, None
 
 
 # ==================== 主界面 ====================
 def main():
-    st.set_page_config(page_title="Al Brooks 训练器 V6.0", layout="wide")
+    st.set_page_config(page_title="Al Brooks 训练器 V7.0", layout="wide")
     
     st.markdown("""
     <style>
@@ -399,17 +406,11 @@ def main():
         border-radius: 12px;
         padding: 8px 12px;
     }
-    .mode-reading {
+    .observation-card {
         background-color: #e3f2fd;
-        padding: 4px 12px;
-        border-radius: 20px;
-        display: inline-block;
-    }
-    .mode-story {
-        background-color: #e8f5e9;
-        padding: 4px 12px;
-        border-radius: 20px;
-        display: inline-block;
+        border-radius: 8px;
+        padding: 12px;
+        margin: 8px 0;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -418,40 +419,23 @@ def main():
 
     # 侧边栏
     with st.sidebar:
-        st.markdown("### 📊 训练器 V6.0")
+        st.markdown("### 📊 训练器 V7.0")
         st.markdown("---")
-        
-        # 模式选择
-        mode = st.radio(
-            "训练模式",
-            options=["读盘模式（推荐90%）", "故事模式（10%）"],
-            index=0,
-            help="读盘模式：逐段开放K线，训练实时判断能力。故事模式：完整80根，训练整体归纳能力。"
-        )
-        st.session_state.mode = "reading" if "读盘" in mode else "story"
-        
-        st.markdown("---")
-        
-        if st.session_state.mode == "reading":
-            st.markdown("**当前进度**")
-            current = st.session_state.current_segment_idx
-            total = len(READING_SEGMENTS)
-            st.progress(current / total if total > 0 else 0)
-            if current < total:
-                st.caption(f"K1 → K{READING_SEGMENTS[current]}")
-            else:
-                st.caption("已完成")
-            
-            st.markdown("---")
-            st.markdown("**修正次数**")
-            st.metric("观点修正", st.session_state.correction_count)
-        else:
-            st.markdown("**故事模式**")
-            st.caption("自由讲述今天的故事")
-            st.caption("AI会随机提问挑战")
+        st.markdown("**核心理念**")
+        st.caption("不断重复四句话：")
+        st.caption("① 我观察到了什么？")
+        st.caption("② 我如何解释这些证据？")
+        st.caption("③ 我的置信度是多少？")
+        st.caption("④ 什么会让我改变看法？")
         
         st.markdown("---")
         st.metric("完成复盘次数", st.session_state.practice_count)
+        
+        if st.session_state.observation_log:
+            st.markdown("---")
+            st.markdown("**观点演化**")
+            for log in st.session_state.observation_log[-3:]:
+                st.caption(f"K{log['end']}: {log.get('interpretation', '')[:50]}...")
         
         st.markdown("---")
         period_map = {"15分钟": "15", "30分钟": "30", "60分钟": "60"}
@@ -470,7 +454,7 @@ def main():
         
         st.markdown("---")
         if st.session_state.df is not None:
-            if st.button("🔄 重置", use_container_width=True):
+            if st.button("🔄 重置训练", use_container_width=True):
                 reset_session()
                 st.rerun()
 
@@ -479,27 +463,24 @@ def main():
         st.markdown("## 👈 请从左侧选择品种开始训练")
         st.markdown("""
         <div style="background:#f8f9fa;padding:20px;border-radius:12px;border:1px solid #e9ecef;">
-        <h3>Al Brooks 训练器 V6.0</h3>
-        <p><strong>训练目标：在不知道未来的情况下，持续更新对市场控制权的理解。</strong></p>
+        <h3>Al Brooks 训练器 V7.0</h3>
+        <p><strong>训练目标：不断重复四句话——</strong></p>
+        <ol>
+            <li><strong>我观察到了什么？</strong>（描述具体的K线特征）</li>
+            <li><strong>我如何解释这些证据？</strong>（市场在告诉你什么）</li>
+            <li><strong>我的置信度是多少？</strong>（0-100%）</li>
+            <li><strong>什么新证据会让我改变看法？</strong>（反证条件）</li>
+        </ol>
         
-        <h4>📖 读盘模式（推荐90%训练时间）</h4>
+        <h4>📖 训练流程</h4>
         <ul>
-            <li>K线逐段开放（K20 → K35 → K50 → K65 → K80）</li>
-            <li>每段结束后，判断当前谁控制市场</li>
-            <li>AI随机提问挑战你的判断</li>
-            <li>新证据出现时，修正之前的观点</li>
-            <li><strong>系统记录修正次数</strong>（这是核心训练指标）</li>
+            <li>K线自动推进，遇到关键事件时暂停</li>
+            <li>记录你的观察、解释、置信度、反证条件</li>
+            <li>AI挑战你的思考（不是判断对错）</li>
+            <li>完成后自动生成观点演化图</li>
         </ul>
         
-        <h4>📖 故事模式（10%训练时间）</h4>
-        <ul>
-            <li>一次性看完80根K线</li>
-            <li>自由讲述今天的故事</li>
-            <li>AI随机提问挑战</li>
-            <li>训练整体结构归纳能力</li>
-        </ul>
-        
-        <p style="color:#6c757d;">💡 读盘模式训练的是"实时更新"，故事模式训练的是"整体归纳"。两者结合才是完整的Brooks训练。</p>
+        <p style="color:#6c757d;">💡 训练的是"如何思考"，而不是"答案是什么"。</p>
         </div>
         """, unsafe_allow_html=True)
         return
@@ -507,129 +488,140 @@ def main():
     df = st.session_state.df
     max_bar = st.session_state.max_bar
 
-    # ========== 读盘模式 ==========
-    if st.session_state.mode == "reading":
-        current_idx = st.session_state.current_segment_idx
-        total_segments = len(READING_SEGMENTS)
+    # ========== 训练完成 ==========
+    if st.session_state.session_complete:
+        st.success("🎉 完成一次读盘训练！")
         
-        if current_idx >= total_segments:
+        # 生成观点演化图
+        if st.session_state.observation_log:
+            st.markdown("### 📈 观点演化记录")
+            for log in st.session_state.observation_log:
+                with st.expander(f"📍 K{log['end']} - {log.get('event', '事件')}", expanded=False):
+                    st.markdown(f"**观察：** {log.get('observation', '')}")
+                    st.markdown(f"**解释：** {log.get('interpretation', '')}")
+                    st.markdown(f"**置信度：** {log.get('confidence', '')}%")
+                    st.markdown(f"**反证条件：** {log.get('counter', '')}")
+        
+        # 生成最终总结
+        with st.spinner("生成总结..."):
+            evolution_text = "\n".join([
+                f"K{log['end']}: {log.get('interpretation', '')} (置信度{log.get('confidence', '')}%)"
+                for log in st.session_state.observation_log
+            ])
+            summary = call_summary(evolution_text)
+            st.markdown("### 📖 今天的故事")
+            st.info(summary)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🔄 继续训练", type="primary"):
+                st.session_state.practice_count += 1
+                reset_session()
+                st.rerun()
+        with col2:
+            if st.button("🎲 换一个品种"):
+                all_codes = []
+                for codes in EXCHANGES.values():
+                    all_codes.extend(codes)
+                new_code = random.choice(all_codes)
+                load_new_symbol(new_code, "30")
+                st.rerun()
+        return
+
+    # ========== 事件驱动读盘 ==========
+    current_pos = st.session_state.current_position
+    
+    # 显示图表
+    st.plotly_chart(build_chart(df, max_bar, current_pos), use_container_width=True)
+    
+    # 检查是否需要触发新事件
+    if not st.session_state.waiting_for_observation:
+        # 推进到下一个事件
+        new_pos, event = advance_to_next_event(df, current_pos, max_bar)
+        
+        if new_pos >= max_bar or event is None:
             # 训练完成
-            st.success(f"🎉 完成一次读盘训练！观点修正次数：{st.session_state.correction_count}")
-            
-            # 显示修正记录
-            if st.session_state.segment_judgments:
-                st.markdown("### 📝 观点演变记录")
-                for i, j in enumerate(st.session_state.segment_judgments):
-                    seg_end = READING_SEGMENTS[i]
-                    st.caption(f"**K{seg_end}时**：{j[:100]}...")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("🔄 继续训练", type="primary"):
-                    st.session_state.practice_count += 1
-                    reset_session()
-                    st.rerun()
-            with col2:
-                if st.button("🎲 换一个品种"):
-                    all_codes = []
-                    for codes in EXCHANGES.values():
-                        all_codes.extend(codes)
-                    new_code = random.choice(all_codes)
-                    load_new_symbol(new_code, "30")
-                    st.rerun()
-            return
-        
-        # 当前段
-        current_end = READING_SEGMENTS[current_idx]
-        prev_end = READING_SEGMENTS[current_idx - 1] if current_idx > 0 else 0
-        
-        # 显示图表（只显示到当前段）
-        st.plotly_chart(build_partial_chart(df, max_bar, current_end), use_container_width=True)
-        
-        st.markdown(f"### 🎯 K{prev_end+1 if prev_end > 0 else 1} → K{current_end}")
-        st.markdown("**请判断：当前谁控制市场？**")
-        st.caption("（多头/空头/震荡？控制权是否发生了变化？）")
-        
-        # 对话区域
-        conv = st.session_state.conversations
-        for msg in conv:
-            if isinstance(msg, dict) and "role" in msg and "content" in msg:
-                with st.chat_message(msg["role"]):
-                    st.markdown(msg["content"])
-        
-        user_input = st.chat_input("例如：目前空头控制，K12-K18连续下跌，反弹无力...")
-        
-        if user_input:
-            conv.append({"role": "user", "content": user_input})
-            
-            # 检查是否修正了观点
-            if len(st.session_state.segment_judgments) > 0:
-                if check_correction(st.session_state.segment_judgments[-1], user_input):
-                    st.session_state.correction_count += 1
-                    st.toast(f"✅ 观点修正！总修正次数：{st.session_state.correction_count}")
-            
-            # 保存当前判断
-            if current_idx == len(st.session_state.segment_judgments):
-                st.session_state.segment_judgments.append(user_input)
-            
-            with st.spinner("AI思考中..."):
-                ai_response = call_reading_mode_challenge(user_input, prev_end+1, current_end)
-            
-            conv.append({"role": "assistant", "content": ai_response})
-            
-            # 进入下一段
-            st.session_state.current_segment_idx += 1
+            st.session_state.session_complete = True
+            st.rerun()
+        else:
+            # 触发事件，等待用户观察
+            st.session_state.waiting_for_observation = True
+            st.session_state.current_event = event
+            st.session_state.current_event_start = current_pos
+            st.session_state.current_event_end = new_pos
+            st.session_state.current_position = new_pos
             st.rerun()
     
-    # ========== 故事模式 ==========
+    # ========== 等待用户观察 ==========
     else:
-        # 显示完整图表
-        show_labels = st.checkbox("显示K线编号", value=False)
-        st.plotly_chart(build_chart(df, max_bar, show_labels), use_container_width=True)
+        event = st.session_state.current_event
+        event_start = st.session_state.current_event_start
+        event_end = st.session_state.current_event_end
         
-        st.markdown("### 📖 请讲述今天的故事")
-        st.caption("自由讲述，不限格式。AI会随机提问挑战。")
+        st.markdown(f"### 🚨 关键事件触发")
+        st.markdown(f"**K{event_start+1 if event_start > 0 else 1} → K{event_end}**")
+        st.markdown(f"**事件：** {event}")
         
-        # 对话区域
+        # 显示已有的对话
         conv = st.session_state.conversations
         for msg in conv:
-            if isinstance(msg, dict) and "role" in msg and "content" in msg:
-                with st.chat_message(msg["role"]):
-                    st.markdown(msg["content"])
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
         
-        if st.session_state.session_complete:
-            st.success("🎉 故事已充分讨论！")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("🔄 继续训练", type="primary"):
-                    st.session_state.practice_count += 1
-                    reset_session()
-                    st.rerun()
-            with col2:
-                if st.button("🎲 换一个品种"):
-                    all_codes = []
-                    for codes in EXCHANGES.values():
-                        all_codes.extend(codes)
-                    new_code = random.choice(all_codes)
-                    load_new_symbol(new_code, "30")
-                    st.rerun()
-            return
+        # 引导用户完成四步思考
+        if len(conv) == 0:
+            # 第一次：引导用户回答四个问题
+            guide = call_observation_guide(event, event_start+1, event_end)
+            with st.chat_message("assistant"):
+                st.markdown(guide)
+            conv.append({"role": "assistant", "content": guide})
         
-        user_input = st.chat_input("例如：开盘后空头控制，K15-K25形成下降通道，K28出现双底...")
+        # 等待用户输入
+        user_input = st.chat_input("请回答上述问题...")
         
         if user_input:
             conv.append({"role": "user", "content": user_input})
             
+            # 尝试解析用户的四个回答
+            observation = user_input[:200] if "观察" in user_input else user_input[:100]
+            interpretation = ""
+            confidence = ""
+            counter = ""
+            
+            # 简单解析
+            if "观察" in user_input:
+                parts = user_input.split("观察")
+                observation = "观察" + parts[1][:150] if len(parts) > 1 else user_input[:150]
+            if "解释" in user_input:
+                parts = user_input.split("解释")
+                interpretation = parts[1][:150] if len(parts) > 1 else ""
+            if "置信度" in user_input:
+                import re
+                match = re.search(r'置信度[：:]\s*(\d+)', user_input)
+                if match:
+                    confidence = match.group(1)
+            if "改变" in user_input or "反证" in user_input:
+                counter = user_input[-150:]
+            
+            # 记录到观点演化日志
+            st.session_state.observation_log.append({
+                "end": event_end,
+                "event": event,
+                "observation": observation,
+                "interpretation": interpretation,
+                "confidence": confidence,
+                "counter": counter
+            })
+            
+            # AI挑战用户的思考
             with st.spinner("AI思考中..."):
-                ai_response = call_story_mode_challenge(user_input)
+                challenge = call_challenge(user_input)
             
-            conv.append({"role": "assistant", "content": ai_response})
+            conv.append({"role": "assistant", "content": challenge})
             
-            # 简单判断：如果有3轮以上对话，视为完成
-            if len([m for m in conv if m["role"] == "user"]) >= 3:
-                st.session_state.session_complete = True
-            
+            # 继续下一段
+            st.session_state.waiting_for_observation = False
+            st.session_state.conversations = []
             st.rerun()
 
 
