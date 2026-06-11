@@ -1,15 +1,12 @@
 """
-Al Brooks 日内机会寻找训练器 V7.0
-核心目标：训练用户不断重复四句话——
-1. 我观察到了什么？
-2. 我如何解释这些证据？
-3. 我的置信度是多少？
-4. 什么新证据会让我改变看法？
+Al Brooks 日内机会寻找训练器 V8.0
+核心目标：在信息不完整的情况下，根据不断出现的新证据，持续更新自己对市场的理解
 
-三个阶段：
-1. 事件驱动读盘（95%）：事件触发开放，记录观察、解释、置信度、反证条件
-2. 观点演化复盘（自动）：生成观点演化图
-3. Brooks总结（5%）：最后才问"今天是什么样的一天"
+训练流程：
+1. 逐K/每N根推进（用户可调节：5/10/20根）
+2. 每段结束后，记录：我看到、我认为、置信度、什么会改变看法
+3. 系统自动记录观点演化时间轴（重点记录修正）
+4. 训练结束后，用户自己总结，AI只挑战不下结论
 """
 
 import streamlit as st
@@ -22,7 +19,6 @@ from openai import OpenAI
 import random
 import time
 import re
-from datetime import datetime
 
 # ==================== 配置 ====================
 SYMBOL_NAMES = {
@@ -45,95 +41,60 @@ EXCHANGES = {
     "能源": ["SC", "FU"],
 }
 
-# 事件类型定义（触发暂停的关键事件）
-KEY_EVENTS = [
-    "连续3根同向K线",
-    "大K线（实体>80%波幅）",
-    "突破前高/前低",
-    "失败突破",
-    "双顶/双底形成",
-    "趋势线被刺穿",
-    "外包/内包K线",
-    "成交量异常放大",
-    "窄幅横盘（连续3根小K线）",
-    "反转K线（长影线）"
-]
+# 离散置信度选项
+CONFIDENCE_OPTIONS = {
+    "30%": "低置信（几乎不知道，两边都合理）",
+    "50%": "中置信（两边都行，轻微倾向）",
+    "70%": "高置信（有一定把握，但可能错）",
+    "90%": "极高置信（市场给了非常强证据）"
+}
+
+# 推进步长选项
+STEP_OPTIONS = [5, 10, 20]
 
 # ==================== AI 提示词 ====================
-OBSERVATION_SYSTEM = """你是 Al Brooks 价格行为教练。
-
-【当前模式】事件驱动读盘
-用户刚刚看到一段新的K线，触发了关键事件。
-
-你的任务是：引导用户完成四步思考，不要替他下结论。
-
-【输出格式】
-请依次问这四个问题（每问一行）：
-1. 你观察到了什么？（请引用具体K线特征）
-2. 你如何解释这些证据？（市场在告诉你什么？）
-3. 你现在的置信度是多少？（0-100%）
-4. 什么新证据会让你改变这个看法？
-
-【事件信息】
-触发事件：{event}
-K线范围：K{start} ~ K{end}
-"""
-
 CHALLENGE_SYSTEM = """你是 Al Brooks 价格行为教练。
 
-用户已经给出了他的观察和解释。你的任务是：挑战他的思考，而不是判断对错。
+【你的角色】
+你不是老师，你是陪练。
+你的任务不是判断对错，而是挑战用户的思考过程。
+
+【用户刚刚完成了第{step_num}段的分析】
+他看到：{observation}
+他认为：{interpretation}
+置信度：{confidence}
+反证条件：{counter}
 
 【输出格式】
-请从以下角度选1-2个提问：
+请从以下角度选1-2个提问，不要下结论，不要替用户分析：
 - 有没有相反的证据？
 - 这个解释还有其他可能性吗？
+- 你的置信度主要基于哪几根K线？
 - 如果市场现在反转，你会怎么调整？
-- 你的置信度基于哪些具体K线？
 
 控制在80字以内。
-
-【用户当前回答】
-{user_answer}
 """
 
-SUMMARY_SYSTEM = """你是 Al Brooks 价格行为教练。
+SUMMARY_CHALLENGE_SYSTEM = """你是 Al Brooks 价格行为教练。
 
-用户完成了整个读盘训练。请帮他总结今天的故事。
+用户刚刚完成了整个读盘训练，正在自己总结今天的故事。
 
-【输出格式】
-用3-5句话总结：
-1. 今天故事的主要演变过程
-2. 用户观点修正的关键节点
-3. 最终的市场理解
+【用户的总结】
+{user_summary}
 
 【观点演化记录】
 {evolution_log}
+
+【输出格式】
+请只做两件事：
+1. 追问1-2个帮助用户发现遗漏的问题
+2. 不要替用户总结，不要给出标准答案
+
+控制在100字以内。
 """
 
 
-def call_observation_guide(event, start, end):
-    """引导用户完成四步思考"""
-    api_key = st.secrets.get("OPENAI_API_KEY", "")
-    base_url = st.secrets.get("OPENAI_BASE_URL", "https://api.deepseek.com")
-    model = st.secrets.get("OPENAI_MODEL", "deepseek-chat")
-    
-    if not api_key:
-        return "请回答：\n1. 你观察到了什么？\n2. 你如何解释？\n3. 置信度？\n4. 什么会让你改变看法？"
-    
-    system = OBSERVATION_SYSTEM.format(event=event, start=start, end=end)
-    
-    try:
-        client = OpenAI(base_url=base_url, api_key=api_key)
-        resp = client.chat.completions.create(
-            model=model, messages=[{"role": "system", "content": system}],
-            temperature=0.5, max_tokens=200
-        )
-        return resp.choices[0].message.content
-    except Exception as e:
-        return f"请思考这四个问题：\n1. 观察到了什么？\n2. 如何解释？\n3. 置信度？\n4. 什么会让你改变看法？\n(API: {str(e)[:50]})"
-
-
-def call_challenge(user_answer):
+def call_challenge(observation, interpretation, confidence, counter, step_num):
     """挑战用户的思考"""
     api_key = st.secrets.get("OPENAI_API_KEY", "")
     base_url = st.secrets.get("OPENAI_BASE_URL", "https://api.deepseek.com")
@@ -142,7 +103,13 @@ def call_challenge(user_answer):
     if not api_key:
         return "有没有相反的证据？还有其他可能性吗？"
     
-    system = CHALLENGE_SYSTEM.format(user_answer=user_answer[:500])
+    system = CHALLENGE_SYSTEM.format(
+        step_num=step_num,
+        observation=observation[:200],
+        interpretation=interpretation[:200],
+        confidence=confidence,
+        counter=counter[:200]
+    )
     
     try:
         client = OpenAI(base_url=base_url, api_key=api_key)
@@ -152,88 +119,32 @@ def call_challenge(user_answer):
         )
         return resp.choices[0].message.content
     except Exception as e:
-        return "有没有相反的证据？还有其他解释吗？"
+        return f"有没有相反的证据？(API: {str(e)[:50]})"
 
 
-def call_summary(evolution_log):
-    """生成最终总结"""
+def call_summary_challenge(user_summary, evolution_log):
+    """挑战用户的总结"""
     api_key = st.secrets.get("OPENAI_API_KEY", "")
     base_url = st.secrets.get("OPENAI_BASE_URL", "https://api.deepseek.com")
     model = st.secrets.get("OPENAI_MODEL", "deepseek-chat")
     
-    if not api_key or not evolution_log:
-        return "完成训练后，系统将自动生成今天的故事总结。"
+    if not api_key:
+        return "有没有遗漏的关键转折点？"
     
-    system = SUMMARY_SYSTEM.format(evolution_log=evolution_log[:1500])
+    system = SUMMARY_CHALLENGE_SYSTEM.format(
+        user_summary=user_summary[:500],
+        evolution_log=evolution_log[:1000]
+    )
     
     try:
         client = OpenAI(base_url=base_url, api_key=api_key)
         resp = client.chat.completions.create(
             model=model, messages=[{"role": "system", "content": system}],
-            temperature=0.5, max_tokens=300
+            temperature=0.5, max_tokens=150
         )
         return resp.choices[0].message.content
     except Exception as e:
-        return "今天的故事总结将在这里显示。"
-
-
-# ==================== 事件检测 ====================
-def detect_events(df, start_idx, end_idx):
-    """
-    检测K线范围内是否发生关键事件
-    返回：触发的事件名称，如果没有则返回None
-    """
-    if end_idx - start_idx < 3:
-        return None
-    
-    sub = df.iloc[start_idx:end_idx+1]
-    n = len(sub)
-    
-    if n < 3:
-        return None
-    
-    # 1. 连续3根同向K线
-    last_3 = sub.iloc[-3:]
-    bull_count = sum(1 for _, row in last_3.iterrows() if row["close"] >= row["open"])
-    if bull_count == 3:
-        return "连续3根多头K线（强势上涨）"
-    if bull_count == 0:
-        return "连续3根空头K线（强势下跌）"
-    
-    # 2. 大K线（实体>80%波幅）
-    last = sub.iloc[-1]
-    body = abs(last["close"] - last["open"])
-    total = last["high"] - last["low"]
-    if total > 0 and body / total > 0.8:
-        direction = "阳线" if last["close"] >= last["open"] else "阴线"
-        return f"大{direction}线（实体占比{body/total*100:.0f}%）"
-    
-    # 3. 突破前高/前低
-    if n >= 5:
-        recent_high = sub.iloc[:-1]["high"].max()
-        recent_low = sub.iloc[:-1]["low"].min()
-        if last["high"] > recent_high:
-            return f"突破近期高点（K{start_idx+end_idx} > 前{min(5, n-1)}根高点）"
-        if last["low"] < recent_low:
-            return f"跌破近期低点（K{start_idx+end_idx} < 前{min(5, n-1)}根低点）"
-    
-    # 4. 内包/外包
-    if n >= 2:
-        prev = sub.iloc[-2]
-        curr = sub.iloc[-1]
-        if curr["high"] < prev["high"] and curr["low"] > prev["low"]:
-            return f"内包线（K{start_idx+end_idx}完全在K{start_idx+end_idx-1}内部）"
-        if curr["high"] > prev["high"] and curr["low"] < prev["low"]:
-            return f"外包线（K{start_idx+end_idx}完全包含K{start_idx+end_idx-1}）"
-    
-    # 5. 窄幅横盘
-    if n >= 3:
-        last_3_range = sub.iloc[-3:]["high"].max() - sub.iloc[-3:]["low"].min()
-        avg_range = sub.iloc[:]["high"].max() - sub.iloc[:]["low"].min() if n > 3 else last_3_range
-        if avg_range > 0 and last_3_range / avg_range < 0.3:
-            return "连续3根小K线（窄幅横盘）"
-    
-    return None
+        return "有没有遗漏的关键证据？"
 
 
 # ==================== 数据加载 ====================
@@ -314,6 +225,19 @@ def build_chart(df, max_bar, current_end=None):
             yshift=15
         )
 
+    # 标记观点修正点
+    if st.session_state.observation_log:
+        for log in st.session_state.observation_log:
+            if log.get("corrected", False):
+                end_pos = log["end"]
+                if end_pos <= n_bars:
+                    fig.add_annotation(
+                        x=end_pos - 1, y=plot_df.iloc[min(end_pos-1, n_bars-1)]["low"],
+                        text="✏️ 修正", showarrow=False,
+                        font=dict(size=10, color="#4caf50"),
+                        yshift=-20
+                    )
+
     fig.update_layout(
         xaxis_rangeslider_visible=False,
         height=500,
@@ -334,16 +258,17 @@ def init_state():
         "df": None,
         "symbol": None,
         "max_bar": 80,
-        "current_position": 20,  # 当前K线位置（从20开始）
-        "event_log": [],  # 事件日志
-        "observation_log": [],  # 用户观察日志（观点演化）
-        "conversations": [],  # 当前对话
+        "step_size": 10,  # 每段推进的K线数量
+        "current_position": 10,  # 当前K线位置（从10开始）
+        "observation_log": [],  # 观点演化日志
         "session_complete": False,
         "practice_count": 0,
+        "current_step_num": 0,
         "waiting_for_observation": False,
-        "current_event": None,
-        "current_event_start": 0,
-        "current_event_end": 0,
+        "temp_observation": "",
+        "temp_interpretation": "",
+        "temp_confidence": "50%",
+        "temp_counter": "",
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -351,15 +276,15 @@ def init_state():
 
 
 def reset_session():
-    st.session_state.current_position = 20
-    st.session_state.event_log = []
+    st.session_state.current_position = st.session_state.step_size
     st.session_state.observation_log = []
-    st.session_state.conversations = []
     st.session_state.session_complete = False
+    st.session_state.current_step_num = 0
     st.session_state.waiting_for_observation = False
-    st.session_state.current_event = None
-    st.session_state.current_event_start = 0
-    st.session_state.current_event_end = 0
+    st.session_state.temp_observation = ""
+    st.session_state.temp_interpretation = ""
+    st.session_state.temp_confidence = "50%"
+    st.session_state.temp_counter = ""
 
 
 def load_new_symbol(code, period_value):
@@ -376,18 +301,38 @@ def load_new_symbol(code, period_value):
         return True
 
 
-def advance_to_next_event(df, current_pos, max_bar):
-    """推进到下一个事件位置"""
-    for new_pos in range(current_pos + 1, max_bar + 1):
-        event = detect_events(df, max(0, new_pos - 10), new_pos)
-        if event:
-            return new_pos, event
-    return max_bar, None
+def check_correction(prev_log, current_observation, current_interpretation):
+    """检查是否发生了观点修正"""
+    if not prev_log:
+        return False
+    
+    # 简单判断：置信度变化超过30% 或 方向性描述改变
+    prev_conf = int(prev_log.get("confidence", "50%").replace("%", ""))
+    current_conf = int(current_confidence.replace("%", "")) if isinstance(current_confidence, str) else 50
+    
+    if abs(current_conf - prev_conf) >= 30:
+        return True
+    
+    # 检查方向性关键词变化
+    prev_text = prev_log.get("interpretation", "")
+    current_text = current_interpretation
+    
+    direction_keywords = ["多头", "空头", "震荡", "买方", "卖方", "上涨", "下跌"]
+    prev_dir = None
+    current_dir = None
+    
+    for kw in direction_keywords:
+        if kw in prev_text:
+            prev_dir = kw
+        if kw in current_text:
+            current_dir = kw
+    
+    return prev_dir != current_dir and prev_dir is not None and current_dir is not None
 
 
 # ==================== 主界面 ====================
 def main():
-    st.set_page_config(page_title="Al Brooks 训练器 V7.0", layout="wide")
+    st.set_page_config(page_title="Al Brooks 训练器 V8.0", layout="wide")
     
     st.markdown("""
     <style>
@@ -412,6 +357,14 @@ def main():
         padding: 12px;
         margin: 8px 0;
     }
+    .correction-badge {
+        background-color: #4caf50;
+        color: white;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 12px;
+        display: inline-block;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -419,23 +372,36 @@ def main():
 
     # 侧边栏
     with st.sidebar:
-        st.markdown("### 📊 训练器 V7.0")
+        st.markdown("### 📊 训练器 V8.0")
         st.markdown("---")
         st.markdown("**核心理念**")
-        st.caption("不断重复四句话：")
-        st.caption("① 我观察到了什么？")
-        st.caption("② 我如何解释这些证据？")
-        st.caption("③ 我的置信度是多少？")
-        st.caption("④ 什么会让我改变看法？")
+        st.caption("在信息不完整的情况下，根据不断出现的新证据，持续更新自己对市场的理解")
+        
+        st.markdown("---")
+        st.markdown("**训练参数**")
+        
+        # 推进步长选择
+        step_size = st.select_slider(
+            "每段推进K线数",
+            options=STEP_OPTIONS,
+            value=st.session_state.step_size,
+            help="较小的步长训练更细致，较大的步长训练更快"
+        )
+        if step_size != st.session_state.step_size:
+            st.session_state.step_size = step_size
+            reset_session()
+            st.rerun()
         
         st.markdown("---")
         st.metric("完成复盘次数", st.session_state.practice_count)
         
         if st.session_state.observation_log:
             st.markdown("---")
-            st.markdown("**观点演化**")
-            for log in st.session_state.observation_log[-3:]:
-                st.caption(f"K{log['end']}: {log.get('interpretation', '')[:50]}...")
+            st.markdown("**📈 观点演化**")
+            for log in st.session_state.observation_log[-5:]:
+                conf = log.get("confidence", "?")
+                corrected = " ✏️" if log.get("corrected") else ""
+                st.caption(f"K{log['end']}: {conf}{corrected}")
         
         st.markdown("---")
         period_map = {"15分钟": "15", "30分钟": "30", "60分钟": "60"}
@@ -463,58 +429,101 @@ def main():
         st.markdown("## 👈 请从左侧选择品种开始训练")
         st.markdown("""
         <div style="background:#f8f9fa;padding:20px;border-radius:12px;border:1px solid #e9ecef;">
-        <h3>Al Brooks 训练器 V7.0</h3>
-        <p><strong>训练目标：不断重复四句话——</strong></p>
-        <ol>
-            <li><strong>我观察到了什么？</strong>（描述具体的K线特征）</li>
-            <li><strong>我如何解释这些证据？</strong>（市场在告诉你什么）</li>
-            <li><strong>我的置信度是多少？</strong>（0-100%）</li>
-            <li><strong>什么新证据会让我改变看法？</strong>（反证条件）</li>
-        </ol>
+        <h3>Al Brooks 训练器 V8.0</h3>
+        <p><strong>训练目标：在信息不完整的情况下，不断更新对市场的理解。</strong></p>
         
         <h4>📖 训练流程</h4>
-        <ul>
-            <li>K线自动推进，遇到关键事件时暂停</li>
-            <li>记录你的观察、解释、置信度、反证条件</li>
+        <ol>
+            <li>设置每段推进的K线数量（5/10/20根）</li>
+            <li>每段结束后，记录四个核心问题：
+                <ul>
+                    <li><strong>我看到：</strong>具体的K线特征</li>
+                    <li><strong>我认为：</strong>市场在告诉我什么</li>
+                    <li><strong>置信度：</strong>30%/50%/70%/90%</li>
+                    <li><strong>什么会改变看法：</strong>反证条件</li>
+                </ul>
+            </li>
             <li>AI挑战你的思考（不是判断对错）</li>
-            <li>完成后自动生成观点演化图</li>
-        </ul>
+            <li>系统自动记录观点演化，标记修正点</li>
+            <li>全部结束后，自己总结今天的故事</li>
+        </ol>
         
-        <p style="color:#6c757d;">💡 训练的是"如何思考"，而不是"答案是什么"。</p>
+        <p style="color:#6c757d;">💡 核心能力：知道什么时候自己可能是错的，并毫不犹豫地修正。</p>
         </div>
         """, unsafe_allow_html=True)
         return
 
     df = st.session_state.df
     max_bar = st.session_state.max_bar
+    step_size = st.session_state.step_size
+    current_pos = st.session_state.current_position
 
     # ========== 训练完成 ==========
     if st.session_state.session_complete:
         st.success("🎉 完成一次读盘训练！")
         
-        # 生成观点演化图
+        # 显示观点演化时间轴
         if st.session_state.observation_log:
-            st.markdown("### 📈 观点演化记录")
+            st.markdown("### 📈 观点演化时间轴")
+            
             for log in st.session_state.observation_log:
-                with st.expander(f"📍 K{log['end']} - {log.get('event', '事件')}", expanded=False):
-                    st.markdown(f"**观察：** {log.get('observation', '')}")
-                    st.markdown(f"**解释：** {log.get('interpretation', '')}")
-                    st.markdown(f"**置信度：** {log.get('confidence', '')}%")
+                corrected = " ✏️ **（修正点）**" if log.get("corrected") else ""
+                with st.expander(f"📍 K{log['end']} - 置信度 {log.get('confidence', '?')}{corrected}", expanded=False):
+                    st.markdown(f"**我看到：** {log.get('observation', '')}")
+                    st.markdown(f"**我认为：** {log.get('interpretation', '')}")
                     st.markdown(f"**反证条件：** {log.get('counter', '')}")
+                    if log.get("corrected"):
+                        st.caption("✓ 此处发生了观点修正")
+            
+            # 修正统计
+            correction_count = sum(1 for log in st.session_state.observation_log if log.get("corrected"))
+            st.info(f"📊 本次训练共发生 **{correction_count}** 次观点修正")
         
-        # 生成最终总结
-        with st.spinner("生成总结..."):
-            evolution_text = "\n".join([
-                f"K{log['end']}: {log.get('interpretation', '')} (置信度{log.get('confidence', '')}%)"
-                for log in st.session_state.observation_log
-            ])
-            summary = call_summary(evolution_text)
-            st.markdown("### 📖 今天的故事")
-            st.info(summary)
+        # ========== 阶段3：用户自己总结 ==========
+        st.markdown("---")
+        st.markdown("### 📝 请总结今天的故事")
+        st.markdown("请回答以下问题：")
+        st.markdown("1. **今天市场试图做什么？**")
+        st.markdown("2. **它成功了吗？**")
+        st.markdown("3. **最大的意外是什么？**")
+        st.markdown("4. **你什么时候改变了看法？为什么？**")
+        st.markdown("5. **下次遇到类似情况，你会注意什么？**")
         
+        # 显示用户总结历史
+        if "user_summary" in st.session_state and st.session_state.user_summary:
+            with st.expander("你的总结", expanded=False):
+                st.markdown(st.session_state.user_summary)
+        
+        # 总结输入
+        user_summary = st.text_area("你的总结", height=200, placeholder="请用自然语言描述今天的故事...")
+        
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            if st.button("提交总结", type="primary"):
+                if user_summary:
+                    st.session_state.user_summary = user_summary
+                    
+                    # 生成观点演化文本
+                    evolution_text = "\n".join([
+                        f"K{log['end']}: {log.get('interpretation', '')} (置信度{log.get('confidence', '')}%)"
+                        for log in st.session_state.observation_log
+                    ])
+                    
+                    with st.spinner("AI分析中..."):
+                        challenge = call_summary_challenge(user_summary, evolution_text)
+                    
+                    st.session_state.summary_challenge = challenge
+                    st.rerun()
+        
+        # 显示AI挑战
+        if "summary_challenge" in st.session_state:
+            with st.chat_message("assistant"):
+                st.markdown(f"**🤖 AI挑战**\n\n{st.session_state.summary_challenge}")
+        
+        # 继续训练按钮
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("🔄 继续训练", type="primary"):
+            if st.button("🔄 继续训练", type="secondary"):
                 st.session_state.practice_count += 1
                 reset_session()
                 st.rerun()
@@ -528,101 +537,123 @@ def main():
                 st.rerun()
         return
 
-    # ========== 事件驱动读盘 ==========
-    current_pos = st.session_state.current_position
-    
+    # ========== 阶段1：逐段推进 ==========
     # 显示图表
     st.plotly_chart(build_chart(df, max_bar, current_pos), use_container_width=True)
     
-    # 检查是否需要触发新事件
-    if not st.session_state.waiting_for_observation:
-        # 推进到下一个事件
-        new_pos, event = advance_to_next_event(df, current_pos, max_bar)
+    # 显示进度
+    progress = current_pos / max_bar
+    st.progress(progress, text=f"进度：K{current_pos} / K{max_bar}")
+    
+    # 计算当前段范围
+    prev_pos = current_pos - step_size
+    if prev_pos < 0:
+        prev_pos = 0
+    
+    # ========== 等待用户观察 ==========
+    if st.session_state.waiting_for_observation:
+        st.markdown(f"### 🔍 K{prev_pos+1 if prev_pos > 0 else 1} → K{current_pos}")
+        st.markdown("请记录你的观察：")
         
-        if new_pos >= max_bar or event is None:
-            # 训练完成
+        # 观察输入
+        observation = st.text_area(
+            "① 我看到了什么？",
+            value=st.session_state.temp_observation,
+            placeholder="例如：K10-K15连续下跌，K16出现一根大阳线但后续没有跟进...",
+            height=80,
+            key="obs_input"
+        )
+        
+        # 解释输入
+        interpretation = st.text_area(
+            "② 我认为市场在告诉我什么？",
+            value=st.session_state.temp_interpretation,
+            placeholder="例如：空头仍然控制，但多头开始尝试反扑...",
+            height=80,
+            key="int_input"
+        )
+        
+        # 置信度选择
+        confidence = st.radio(
+            "③ 我的置信度",
+            options=list(CONFIDENCE_OPTIONS.keys()),
+            format_func=lambda x: f"{x} - {CONFIDENCE_OPTIONS[x]}",
+            horizontal=True,
+            index=list(CONFIDENCE_OPTIONS.keys()).index(st.session_state.temp_confidence)
+        )
+        
+        # 反证条件输入
+        counter = st.text_area(
+            "④ 什么会让我改变看法？",
+            value=st.session_state.temp_counter,
+            placeholder="例如：如果K17收盘价突破K15的低点，我会重新评估空头控制...",
+            height=80,
+            key="cnt_input"
+        )
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("✅ 提交", type="primary"):
+                if observation and interpretation:
+                    # 检查是否修正
+                    prev_log = st.session_state.observation_log[-1] if st.session_state.observation_log else None
+                    corrected = check_correction(prev_log, observation, interpretation)
+                    
+                    # 记录到日志
+                    st.session_state.observation_log.append({
+                        "end": current_pos,
+                        "observation": observation,
+                        "interpretation": interpretation,
+                        "confidence": confidence,
+                        "counter": counter,
+                        "corrected": corrected
+                    })
+                    
+                    # AI挑战
+                    with st.spinner("AI思考中..."):
+                        challenge = call_challenge(observation, interpretation, confidence, counter, st.session_state.current_step_num + 1)
+                    
+                    st.session_state.last_challenge = challenge
+                    st.session_state.waiting_for_observation = False
+                    st.session_state.current_step_num += 1
+                    
+                    # 清空临时变量
+                    st.session_state.temp_observation = ""
+                    st.session_state.temp_interpretation = ""
+                    st.session_state.temp_confidence = "50%"
+                    st.session_state.temp_counter = ""
+                    
+                    st.rerun()
+                else:
+                    st.warning("请至少填写"观察"和"我认为"")
+        
+        with col2:
+            if st.button("↩️ 返回修改"):
+                # 保存临时值
+                st.session_state.temp_observation = observation
+                st.session_state.temp_interpretation = interpretation
+                st.session_state.temp_confidence = confidence
+                st.session_state.temp_counter = counter
+                st.rerun()
+        
+        # 显示AI挑战
+        if "last_challenge" in st.session_state:
+            with st.chat_message("assistant"):
+                st.markdown(f"**🤖 AI挑战**\n\n{st.session_state.last_challenge}")
+    
+    # ========== 推进到下一段 ==========
+    else:
+        if current_pos >= max_bar:
             st.session_state.session_complete = True
             st.rerun()
         else:
-            # 触发事件，等待用户观察
-            st.session_state.waiting_for_observation = True
-            st.session_state.current_event = event
-            st.session_state.current_event_start = current_pos
-            st.session_state.current_event_end = new_pos
-            st.session_state.current_position = new_pos
-            st.rerun()
-    
-    # ========== 等待用户观察 ==========
-    else:
-        event = st.session_state.current_event
-        event_start = st.session_state.current_event_start
-        event_end = st.session_state.current_event_end
-        
-        st.markdown(f"### 🚨 关键事件触发")
-        st.markdown(f"**K{event_start+1 if event_start > 0 else 1} → K{event_end}**")
-        st.markdown(f"**事件：** {event}")
-        
-        # 显示已有的对话
-        conv = st.session_state.conversations
-        for msg in conv:
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
-        
-        # 引导用户完成四步思考
-        if len(conv) == 0:
-            # 第一次：引导用户回答四个问题
-            guide = call_observation_guide(event, event_start+1, event_end)
-            with st.chat_message("assistant"):
-                st.markdown(guide)
-            conv.append({"role": "assistant", "content": guide})
-        
-        # 等待用户输入
-        user_input = st.chat_input("请回答上述问题...")
-        
-        if user_input:
-            conv.append({"role": "user", "content": user_input})
+            next_pos = min(current_pos + step_size, max_bar)
+            st.info(f"📌 当前分析到 K{current_pos}，点击继续查看下一段")
             
-            # 尝试解析用户的四个回答
-            observation = user_input[:200] if "观察" in user_input else user_input[:100]
-            interpretation = ""
-            confidence = ""
-            counter = ""
-            
-            # 简单解析
-            if "观察" in user_input:
-                parts = user_input.split("观察")
-                observation = "观察" + parts[1][:150] if len(parts) > 1 else user_input[:150]
-            if "解释" in user_input:
-                parts = user_input.split("解释")
-                interpretation = parts[1][:150] if len(parts) > 1 else ""
-            if "置信度" in user_input:
-                import re
-                match = re.search(r'置信度[：:]\s*(\d+)', user_input)
-                if match:
-                    confidence = match.group(1)
-            if "改变" in user_input or "反证" in user_input:
-                counter = user_input[-150:]
-            
-            # 记录到观点演化日志
-            st.session_state.observation_log.append({
-                "end": event_end,
-                "event": event,
-                "observation": observation,
-                "interpretation": interpretation,
-                "confidence": confidence,
-                "counter": counter
-            })
-            
-            # AI挑战用户的思考
-            with st.spinner("AI思考中..."):
-                challenge = call_challenge(user_input)
-            
-            conv.append({"role": "assistant", "content": challenge})
-            
-            # 继续下一段
-            st.session_state.waiting_for_observation = False
-            st.session_state.conversations = []
-            st.rerun()
+            if st.button("➡️ 继续下一段", type="primary"):
+                st.session_state.current_position = next_pos
+                st.session_state.waiting_for_observation = True
+                st.rerun()
 
 
 if __name__ == "__main__":
