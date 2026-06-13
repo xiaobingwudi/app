@@ -1,15 +1,11 @@
 """
-Al Brooks 结构训练器 V25 - 生产终极版
+Al Brooks 结构训练器 V25.1 - 最终修复版
 
-三位一体框架：
-- 时间惯性：连续趋势棒计数 + 80%原则
-- 空间磁铁：ATR距离测量 + 盈亏比感知
-- 微观信号：H1/H2/L1/L2二浪 + Follow-through质量
-
-用户体验：
-- 快捷词按钮 + 智能占位提示
-- AI防幻觉约束 + 交易员方程灌输
-- 结构化下拉选项，潜意识建立PA心法
+核心修复：
+1. 使用st.radio替代st.button，彻底解决表单状态被清空的Bug
+2. 切换K线时彻底清理残留的session_state键值
+3. AI防幻觉约束 + 交易员方程灌输
+4. 快捷键无痛填入，用户可零键盘完成高质量PA报告
 """
 
 import streamlit as st
@@ -53,16 +49,7 @@ SKILL_CONSTRAINTS = {
         "forbidden": ["进场", "止损", "目标位", "预测", "做多", "做空", "看涨", "看跌"]},
 }
 
-# ==================== 快捷词库 ====================
-QUICK_WORDS = {
-    1: ["实体大", "实体小", "光头光脚", "长上影", "长下影", "十字星", "跳空", "重叠多"],
-    2: ["买盘主导", "卖盘主导", "无控制权", "测试失败", "反击无力", "跟进强", "跟进弱"],
-    3: ["实体放大", "实体缩小", "高度重叠", "跳空缺口", "收高位", "收低位", "影线长"],
-    4: ["H1回调", "H2回调", "L1反弹", "L2反弹", "深回调", "触及磁铁", "立即反击"],
-    5: ["好跟随", "坏跟随", "假突破", "缺口未补", "停留3根", "推回测试", "空间充足"],
-}
-
-# ==================== 技能表单定义（V25 - 交易员方程文案）====================
+# ==================== 技能表单定义（V25.1 - 最终版）====================
 SKILL_QUALITY_STANDARDS = {
     1: {
         "name": "背景阅读",
@@ -107,7 +94,7 @@ SKILL_QUALITY_STANDARDS = {
             {"label": "回调/反向持续时间", "type": "select",
              "options": ["请选择...", "1-2根(短暂回调)", "3-5根(正常回调)", "6根以上(深度回调)", "持续反向运动"]},
             {"label": "回调类型(二浪心法)", "type": "select",
-             "options": ["请选择...", "H1/L1 - 激进第一波入场点(胜率较低)", "H2/L2 - 高胜率双底/双顶微观架构(交易员方程最佳解)", "第三次以上(衰竭前兆)", "深幅回调触及磁铁(20EMA/前密集区)"]},
+             "options": ["请选择...", "H1/L1 - 第一次尝试(胜率较低)", "H2/L2 - 第二次尝试(高胜率节点)", "第三次以上(衰竭前兆)", "深幅回调触及磁铁(20EMA/密集区)"]},
             {"label": "是否触及关键结构位", "type": "select",
              "options": ["请选择...", "未触及结构位", "触及但未突破", "已突破结构位", "在结构位挣扎"]},
             {"label": "原方向方是否反击", "type": "select",
@@ -122,9 +109,9 @@ SKILL_QUALITY_STANDARDS = {
             {"label": "是否被推回", "type": "select",
              "options": ["请选择...", "未被推回(有效突破)", "部分推回(回踩确认)", "完全推回(假突破)", "推回后立即反弹"]},
             {"label": "跟随棒质量(Follow-through)", "type": "select",
-             "options": ["请选择...", "Good Follow-through - 大实体跟进，机构资金买入铁证", "Bad Follow-through - 十字星/小实体，缺乏紧迫感，大概率震荡", "反向吞没(Failed Breakout) - 80%概率假突破反转", "缺口(Gap)未被回补 - 强势确认"]},
+             "options": ["请选择...", "Good Follow-through - 大实体跟进", "Bad Follow-through - 十字星/小实体", "反向吞没(Failed Breakout)", "缺口(Gap)未被回补"]},
             {"label": "磁铁空间检查", "type": "select",
-             "options": ["请选择...", "距下一磁铁空间充足(>2倍ATR)", "距磁铁空间不足(<1倍ATR) - 盈亏比极差", "已到达测量目标(MM)", "无明确磁铁目标"]}
+             "options": ["请选择...", "距下一磁铁空间充足(>2倍ATR)", "距磁铁空间不足(<1倍ATR)", "已到达测量目标(MM)", "无明确磁铁目标"]}
         ]
     }
 }
@@ -136,41 +123,38 @@ TRAIN_LEVEL = {
     3: {"name": "结构验证阶段", "desc": "允许失败突破、摆动确认、Always In转换、结构争议。"},
 }
 
-# ==================== AI系统提示词（V25防幻觉版）====================
+# ==================== AI系统提示词（防幻觉版）====================
 AI_SYSTEM_PROMPT_TEMPLATE = """你是 Al Brooks 价格行为训练教练，铁血、严厉、绝不妥协。
 
-【核心原则 - 铁血判分机制】
-1. 你收到的【K线客观统计数据】是算法严格计算的最高真理，包含：宏观惯性环境、ATR磁铁距离、连续趋势棒计数。
-2. 如果用户的选择与客观数据完全吻合，你必须首要肯定其观察的准确性。
-3. 你的"反问"必须是建设性延伸，绝对不允许为了反问而强行否定用户正确的选择。
+【核心原则】
+1. 你收到的【K线客观统计数据】是算法严格计算的最高真理。
+2. 如果用户的选择与客观数据完全吻合，你必须肯定其观察的准确性。
+3. 你的"反问"必须是建设性延伸，绝对不允许强行否定用户正确的选择。
 4. 绝对禁止给出交易建议（做多/做空/进场/止损等）。
 
 【Al Brooks 三位一体铁律】
 1. 时间惯性：市场已连续运行{trend_bar_count}根趋势棒。80%原则：第一次反向尝试大概率失败。
 2. 空间磁铁：价格距上方磁铁{distance_to_high:.1f}倍ATR，距下方磁铁{distance_to_low:.1f}倍ATR。
-3. 微观信号：第二次尝试(H2/L2)是高胜率节点，交易员方程最佳解。
+3. 微观信号：第二次尝试(H2/L2)是高胜率节点。
 
 【禁止的传统分析杂音】
-严格拒绝以下词汇：头肩顶、旗形、楔形、圆弧底、金叉死叉、超买超卖、RSI、MACD。
-Al Brooks价格行为学只关注：K线实体、影线、重叠度、收盘位置、结构位、二浪尝试。
+严格拒绝：头肩顶、旗形、楔形、圆弧底、金叉死叉、超买超卖。
 
 当前技能：{skill_name}
 阶段：{level_name}
 禁止词汇：{forbidden_words}
 
-【第1轮：严审期】
-- 对照客观数据逐一审核用户观察
-- 检查用户是否使用了传统技术分析杂音（头肩顶/金叉等），直接指正
-- 如合格：简短肯定后，反问一个建设性的深层问题
-- 如不合格：指出具体错误，引用数据，要求重新观察
+【第1轮流程】
+- 对照客观数据审核用户观察
+- 如合格：简短肯定后，反问建设性问题
+- 如不合格：指出错误，引用数据，要求重新观察
 
-【第2轮：亮答案】
+【第2轮流程】
 - 点评用户回答
-- 亮出你自己基于客观数据的完整判断（引用具体K线编号）
+- 亮出你自己基于客观数据的完整判断
 
 【用户历史薄弱点】
 {reading_profile}
-针对薄弱点进行针对性刁难。
 
 回答简短，不超过200字。
 """
@@ -240,13 +224,11 @@ def find_structures(df, bar, lookback=40):
 
 # ==================== 核心：生成K线语义化标签 ====================
 def generate_semantic_labels(df, bar):
-    """V25终极版：惯性计数 + ATR磁铁距离 + 二浪识别"""
-    
     # 计算ATR
     ranges = df['high'].iloc[max(0, bar-20):bar+1] - df['low'].iloc[max(0, bar-20):bar+1]
     atr = ranges.mean() if len(ranges) > 0 else 1
     
-    # 宏观惯性：统计连续趋势棒数量
+    # 宏观惯性统计
     lookback = min(30, bar)
     trend_bars = 0
     recent_close = df['close'].iloc[bar]
@@ -291,12 +273,12 @@ def generate_semantic_labels(df, bar):
     lines.append("=" * 55)
     lines.append(f"📊 宏观惯性: 连续趋势棒 {trend_bars} 根")
     if trend_bars >= 10:
-        lines.append(f"   ⚡ 80%原则生效: 第一次反向尝试视为回调，不是反转")
+        lines.append(f"   ⚡ 80%原则生效: 第一次反向尝试视为回调")
     lines.append(f"🧲 磁铁感知: 距上磁铁 {distance_to_high:.1f}倍ATR | 距下磁铁 {distance_to_low:.1f}倍ATR")
     if distance_to_high < 1.0 and distance_to_high > 0:
-        lines.append(f"   ⚠️ 上升空间不足1倍ATR，追多盈亏比极差！")
+        lines.append(f"   ⚠️ 上升空间不足1倍ATR")
     if distance_to_low < 1.0 and distance_to_low > 0:
-        lines.append(f"   ⚠️ 下降空间不足1倍ATR，追空盈亏比极差！")
+        lines.append(f"   ⚠️ 下降空间不足1倍ATR")
     lines.append("")
     lines.append("近期K线 Bar-by-Bar:")
     lines.append("")
@@ -311,13 +293,7 @@ def generate_semantic_labels(df, bar):
         volume_ratio = row['volume'] / avg_volume if avg_volume > 0 else 1
         
         bar_type = "TrendBar" if body_ratio >= 0.50 else "TRBar"
-        
-        if body_ratio >= 0.70:
-            urgency = "极强紧迫"
-        elif body_ratio >= 0.50:
-            urgency = "正常"
-        else:
-            urgency = "弱/无方向"
+        urgency = "极强紧迫" if body_ratio >= 0.70 else "正常" if body_ratio >= 0.50 else "弱/无方向"
         
         # 重叠度
         overlap = "首根"
@@ -331,14 +307,9 @@ def generate_semantic_labels(df, bar):
                 overlap = "跳空Gap"
         
         direction = "阳" if c >= o else "阴"
-        
-        lines.append(
-            f"K{actual_idx}: {direction}{bar_type} | {urgency} | "
-            f"实体{body_ratio*100:.0f}% | {overlap} | "
-            f"量比{volume_ratio:.2f}"
-        )
+        lines.append(f"K{actual_idx}: {direction}{bar_type} | {urgency} | 实体{body_ratio*100:.0f}% | {overlap} | 量比{volume_ratio:.2f}")
     
-    # 保存到session供提示词使用
+    # 保存到session
     st.session_state["_trend_bar_count"] = trend_bars
     st.session_state["_distance_to_high"] = distance_to_high
     st.session_state["_distance_to_low"] = distance_to_low
@@ -387,18 +358,18 @@ def update_profile(response, skill_id):
     st.session_state["reading_profile"] = rp
 
 # ==================== 核心：发送并获取AI反馈 ====================
-def process_submission(user_report, df, bar, skill, current_round):
+def send_and_get_coach_response(user_report, df, bar, active_skill):
     semantic_labels = generate_semantic_labels(df, bar)
     
     trend_count = st.session_state.get("_trend_bar_count", 0)
     dist_high = st.session_state.get("_distance_to_high", 999)
     dist_low = st.session_state.get("_distance_to_low", 999)
     
-    forbidden = "、".join(SKILL_CONSTRAINTS[skill["id"]]["forbidden"])
+    forbidden = "、".join(SKILL_CONSTRAINTS[active_skill["id"]]["forbidden"])
     level = TRAIN_LEVEL[st.session_state.get("train_level", 1)]
     
     system_prompt = AI_SYSTEM_PROMPT_TEMPLATE.format(
-        skill_name=skill["name"],
+        skill_name=active_skill["name"],
         level_name=level["name"],
         forbidden_words=forbidden,
         reading_profile=build_profile(),
@@ -422,14 +393,14 @@ def process_submission(user_report, df, bar, skill, current_round):
     st.session_state["coach_dialogue"].append({"role": "user", "content": user_report})
     st.session_state["coach_dialogue"].append({"role": "assistant", "content": response})
     
-    update_profile(response, skill["id"])
-    st.session_state["skill_round"] = current_round + 1
+    update_profile(response, active_skill["id"])
 
-# ==================== 渲染表单（V25 - 快捷词版）====================
-def render_form(skill_id, current_round, df, bar, active_skill):
+# ==================== 渲染表单（V25.1 - 最终修复版）====================
+def render_skill_form(skill_id, current_round, df, bar, active_skill):
+    """使用st.radio替代st.button，彻底解决表单状态被清空的Bug"""
+    
     std = SKILL_QUALITY_STANDARDS[skill_id]
     fields = std["fields"]
-    quick_words = QUICK_WORDS.get(skill_id, ["实体大", "实体小", "影线长", "重叠多"])
     
     st.markdown("---")
     st.markdown(f"✍️ **第{current_round+1}/2轮 - 请完成以下观察**")
@@ -438,48 +409,53 @@ def render_form(skill_id, current_round, df, bar, active_skill):
     user_inputs = {}
     
     for idx, field in enumerate(fields):
+        field_title = field["label"]
+        field_desc = field.get("placeholder", "")
         unique_key = f"form_{skill_id}_{current_round}_{idx}"
         
         if field["type"] == "select":
-            user_inputs[field["label"]] = st.selectbox(
-                f"**{field['label']}**",
+            user_inputs[field_title] = st.selectbox(
+                f"**{field_title}**",
                 field["options"],
                 key=unique_key
             )
         else:
-            # 文本框 + 快捷词按钮
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                placeholder_map = {
-                    1: "例: 高点3950-3960, 低点3900-3910",
-                    2: "例: 连续3根阴线，实体占波幅>60%，收于低位",
-                    3: "例: 阳线实体持续放大，无上影线，收盘创新高",
-                    4: "例: 回调3根小阴线，未破前低，原方向反包",
-                    5: "例: 突破后停留2根，跟随棒实体大，空间充足",
-                }
-                placeholder = placeholder_map.get(skill_id, "请进行纯客观描述，禁止预测性词汇")
-                
-                user_inputs[field["label"]] = st.text_input(
-                    f"**{field['label']}**",
-                    placeholder=placeholder,
-                    key=unique_key
-                )
-            with col2:
-                st.markdown("---")
-                st.markdown("**快捷词**")
-                quick_cols = st.columns(2)
-                for i, word in enumerate(quick_words[:4]):
-                    if quick_cols[i % 2].button(word, key=f"quick_{skill_id}_{idx}_{i}", use_container_width=True):
-                        current_val = user_inputs.get(field["label"], "")
-                        if current_val:
-                            new_val = current_val + f" {word}"
-                        else:
-                            new_val = word
-                        # 更新session state中的值
-                        st.session_state[unique_key] = new_val
-                        st.rerun()
+            # 文本框 + 快捷词（使用st.radio，不会触发页面刷新）
+            st.markdown(f"**{field_title}**")
+            
+            # 快捷词胶囊 - 点击后自动填入文本框（通过session_state联动）
+            quick_options = [
+                "连续大实体趋势K线，收在极值位置",
+                "K线实体极小，阴阳交错，高度重叠",
+                "关键结构位留下长影线，出现拒绝信号",
+                "实体持续放大，加速推进中"
+            ]
+            
+            selected_quick = st.radio(
+                "📋 快捷词（点击自动填入）",
+                ["[手动输入]"] + quick_options,
+                horizontal=True,
+                key=f"quick_{unique_key}",
+                label_visibility="collapsed"
+            )
+            
+            # 根据选择的快捷词设置默认值
+            default_value = ""
+            if selected_quick != "[手动输入]":
+                default_value = selected_quick
+            
+            # 文本框
+            user_inputs[field_title] = st.text_input(
+                "观察描述",
+                value=st.session_state.get(f"text_{unique_key}", default_value),
+                placeholder=field_desc,
+                key=f"text_{unique_key}",
+                label_visibility="collapsed"
+            )
     
+    # 提交按钮
     if st.button("📤 提交观察", type="primary", use_container_width=True, key=f"submit_{skill_id}_{current_round}"):
+        # 验证
         has_empty = False
         for label, value in user_inputs.items():
             if not value or value == "请选择...":
@@ -492,7 +468,8 @@ def render_form(skill_id, current_round, df, bar, active_skill):
             for label, value in user_inputs.items():
                 report += f"- {label}: {value}\n"
             
-            process_submission(report, df, bar, active_skill, current_round)
+            send_and_get_coach_response(report, df, bar, active_skill)
+            st.session_state["skill_round"] = current_round + 1
             st.rerun()
 
 # ==================== 辅助函数 ====================
@@ -520,6 +497,11 @@ def load_symbol(code, main, period="30"):
     with st.spinner("加载中..."):
         df = load_data(main, period=period)
         if df is not None:
+            # 清理残留状态
+            keys_to_clear = [k for k in st.session_state.keys() if k.startswith("form_") or k.startswith("text_") or k.startswith("quick_")]
+            for k in keys_to_clear:
+                del st.session_state[k]
+            
             st.session_state["chart_df"] = df
             st.session_state["current_bar"] = random_bar(df)
             st.session_state["coach_dialogue"] = []
@@ -527,14 +509,24 @@ def load_symbol(code, main, period="30"):
             st.session_state["symbol_code"] = code
             st.session_state["symbol_name"] = SYMBOL_NAMES.get(code, code)
             st.session_state["data_period"] = period
+            st.session_state["reading_profile"] = {}
             st.success(f"已加载 {st.session_state['symbol_name']} | {len(df)}根K线")
             time.sleep(0.3)
             st.rerun()
 
+# ==================== 清理表单残留状态的函数 ====================
+def clear_form_state():
+    """切换K线时清理所有表单残留状态"""
+    keys_to_clear = [k for k in st.session_state.keys() 
+                     if k.startswith("form_") or k.startswith("text_") or k.startswith("quick_") or k.startswith("submit_")]
+    for k in keys_to_clear:
+        del st.session_state[k]
+
 # ==================== 主函数 ====================
 def main():
-    st.set_page_config(page_title="Al Brooks 结构训练器 V25 - 生产终极版", layout="wide")
+    st.set_page_config(page_title="Al Brooks 结构训练器 V25.1 - 最终版", layout="wide")
     
+    # 初始化
     defaults = {
         "chart_df": None, "current_bar": 40, "coach_dialogue": [],
         "skill_round": 0, "train_level": 1, "train_mode": 1,
@@ -573,6 +565,7 @@ def main():
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("🎲 随机K线", use_container_width=True):
+                    clear_form_state()
                     st.session_state["current_bar"] = random_bar(df)
                     st.session_state["coach_dialogue"] = []
                     st.session_state["skill_round"] = 0
@@ -580,6 +573,7 @@ def main():
             with col2:
                 if st.button("⏭️ 下一根", use_container_width=True):
                     if st.session_state["current_bar"] < len(df) - 1:
+                        clear_form_state()
                         st.session_state["current_bar"] += 1
                         st.session_state["coach_dialogue"] = []
                         st.session_state["skill_round"] = 0
@@ -604,7 +598,6 @@ def main():
         st.caption("• 时间惯性: 连续趋势棒计数")
         st.caption("• 空间磁铁: ATR距离测量")
         st.caption("• 微观信号: H1/H2/L1/L2二浪")
-        st.caption("• 交易员方程: 胜率×盈亏比")
     
     # 主区域
     df = st.session_state.get("chart_df")
@@ -639,10 +632,21 @@ def main():
     
     # 表单
     if st.session_state["skill_round"] < 2:
-        render_form(st.session_state["train_mode"], st.session_state["skill_round"], df, bar, active_skill)
+        render_skill_form(st.session_state["train_mode"], st.session_state["skill_round"], df, bar, active_skill)
     else:
         st.success("✅ 本轮训练完成！点击「下一根」K线或切换技能继续")
-        st.info("💡 小提示：H2/L2是交易员方程的最佳解，关注第二次尝试")
+        
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            if st.button("➡️ 进入下一根K线分析", use_container_width=True):
+                clear_form_state()
+                if bar < len(df) - 1:
+                    st.session_state["current_bar"] = bar + 1
+                else:
+                    st.session_state["current_bar"] = random_bar(df)
+                st.session_state["coach_dialogue"] = []
+                st.session_state["skill_round"] = 0
+                st.rerun()
 
 if __name__ == "__main__":
     main()
