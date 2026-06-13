@@ -1,10 +1,13 @@
 """
-Al Brooks 结构训练器 V20 - 优化版
-核心改进：
-1. 增加结构位自动识别（前高、前低、密集成交区）
-2. 优化AI提示词，允许使用结构位词汇
-3. 增强K线数据输出，包含更多分析维度
+Al Brooks 结构训练器 V21 - 深度优化版
+
+核心改进（基于专业点评反馈）：
+1. 结构化输入：分段式填空，降低认知负载，形成观察条件反射
+2. Brooks原生术语标签：将K线数字翻译为趋势K线/震荡K线/紧迫度等语义标签
+3. Al Brooks铁律注入：80%原则、惯性原理、重叠度判断
+4. 画像实时喂回：AI根据用户弱项进行针对性提问
 """
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -17,8 +20,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import random, json, time, re
 
 # ==================== 品种映射表 ====================
-# 功能：将代码转换为中文名称，用于界面显示
-# 细节：覆盖国内期货市场主要品种，代码格式为交易所标准
 SYMBOL_NAMES = {
     "IF": "沪深300股指", "IH": "上证50股指", "IC": "中证500股指", "IM": "中证1000股指",
     "CU": "沪铜", "AL": "沪铝", "ZN": "沪锌", "PB": "沪铅", "NI": "沪镍", "SN": "沪锡",
@@ -35,8 +36,6 @@ SYMBOL_NAMES = {
 }
 
 # ==================== 技能定义 ====================
-# 功能：定义五个核心技能的约束和允许的分析维度
-# 细节：每个技能有独立的禁止词汇列表，防止AI提前给出交易建议
 SKILL_CONSTRAINTS = {
     1: {
         "name": "背景阅读",
@@ -50,7 +49,7 @@ SKILL_CONSTRAINTS = {
         "question": "现在谁在控制市场？",
         "forbidden": ["趋势", "方向", "预测", "目标位", "进场", "止损", "做多", "做空"],
         "allowed": "最近3-5根K线谁在主导、推进方实体质量、对手方有无有效反击、结构位附近的行为",
-        "desc": "只关注最近几根K线的力量对比，禁止谈论大趋势和预测。允许使用结构位词汇。"
+        "desc": "只关注最近几根K线的力量对比，禁止谈论大趋势和预测。"
     },
     3: {
         "name": "推进质量",
@@ -64,77 +63,82 @@ SKILL_CONSTRAINTS = {
         "question": "这是正常回调还是控制权转换？",
         "forbidden": ["预测", "目标位", "进场", "止损", "开仓"],
         "allowed": "回调K线数量、回调实体强弱、对手方连续性、有无跟进、结构位是否被突破",
-        "desc": "区分回调与转换，禁止谈论后续走势预测。允许使用结构位词汇。"
+        "desc": "区分回调与转换，禁止谈论后续走势预测。"
     },
     5: {
         "name": "市场接受",
         "question": "市场是否接受了新价格？",
         "forbidden": ["进场", "止损", "目标位", "预测", "做多", "做空"],
         "allowed": "突破后停留几根、有无推回、有无继续推进、成交量确认",
-        "desc": "只关注价格突破后的市场反应，禁止交易建议。允许使用结构位词汇。"
+        "desc": "只关注价格突破后的市场反应，禁止交易建议。"
     }
 }
-# ==================== 技能合格回答标准定义（新增）====================
-# 功能：定义每个技能必须包含的观察维度，用于生成输入框提示和判断回答质量
+
+# ==================== 技能合格回答标准定义 ====================
+# 每个维度的key用于结构化输入，desc用于显示提示
 SKILL_QUALITY_STANDARDS = {
     1: {
         "name": "背景阅读",
-        "must_contain": [
-            "高低点序列：是HH/HL（上升）还是LH/LL（下降）？",
-            "区间/通道边界：具体数值是多少？",
-            "当前价格在结构中的位置：接近上沿/下沿/中间？"
+        "dimensions": [
+            {"key": "sequence", "label": "高低点序列", "placeholder": "观察最近10-15根K线的高点和低点，是HH/HL（上升序列）还是LH/LL（下降序列）？"},
+            {"key": "boundary", "label": "区间/通道边界", "placeholder": "当前结构的高点区间和低点区间分别在哪个价格区域？"},
+            {"key": "position", "label": "当前价格位置", "placeholder": "当前价格在结构中的什么位置？接近上沿/下沿/中间？"}
         ],
+        "must_contain": ["高低点序列", "区间/通道边界", "当前价格位置"],
         "reject_if_only": ["上升趋势", "下降趋势", "震荡"],
-        "placeholder": "请观察以下维度：\n1. 高低点序列是HH/HL还是LH/LL？\n2. 区间/通道边界在哪个价格区域？\n3. 当前价格在结构中的什么位置？"
+        "placeholder": "请观察以下维度"
     },
     2: {
         "name": "控制权识别",
-        "must_contain": [
-            "最近3-5根K线，谁在主动推进？",
-            "推进方的K线实体质量如何？",
-            "对手方有没有反击？反击的K线特征是什么？",
-            "反击是否得到后续跟进？"
+        "dimensions": [
+            {"key": "initiator", "label": "推进方是谁", "placeholder": "最近3-5根K线，是买方在主导还是卖方在主导？"},
+            {"key": "quality", "label": "推进方实体质量", "placeholder": "推进方的K线实体占波幅多少？收盘在什么位置（高位/中位/低位）？"},
+            {"key": "counter", "label": "对手方反击情况", "placeholder": "对手方有没有反击？反击的K线特征是什么（实体大小、影线）？"},
+            {"key": "follow", "label": "反击是否被跟进", "placeholder": "反击发生后，是否有后续K线跟进？还是被立即反包？"}
         ],
+        "must_contain": ["推进方是谁", "推进方实体质量", "对手方反击情况", "反击是否被跟进"],
         "reject_if_only": ["多头控制", "空头控制"],
-        "placeholder": "请观察以下维度：\n1. 最近3-5根K线，谁在主动推进？\n2. 推进方的实体占波幅多少？收盘位置在哪里？\n3. 对手方有没有反击？反击的K线特征是什么？\n4. 反击是否得到后续跟进？"
+        "placeholder": "请观察以下维度"
     },
     3: {
         "name": "推进质量",
-        "must_contain": [
-            "连续K线的实体大小变化：放大还是缩小？",
-            "K线之间的重叠程度：紧密重叠还是有跳空？",
-            "影线特征：有无长上/下影线？",
-            "收盘位置：高位/中位/低位？"
+        "dimensions": [
+            {"key": "entity_change", "label": "实体大小变化", "placeholder": "连续K线的实体大小是放大还是缩小？"},
+            {"key": "overlap", "label": "K线重叠程度", "placeholder": "K线之间是紧密重叠还是有跳空？重叠比例约为多少？"},
+            {"key": "shadow", "label": "影线特征", "placeholder": "有无长上影线或长下影线？影线长度占波幅多少？"},
+            {"key": "close", "label": "收盘位置", "placeholder": "收盘价在K线实体的高位、中位还是低位？"}
         ],
+        "must_contain": ["实体大小变化", "K线重叠程度", "影线特征", "收盘位置"],
         "reject_if_only": ["推进很强", "推进很弱"],
-        "placeholder": "请观察以下维度：\n1. 连续K线的实体大小是放大还是缩小？\n2. K线之间是紧密重叠还是有跳空？\n3. 有无长上/下影线？\n4. 收盘位置在高位、中位还是低位？"
+        "placeholder": "请观察以下维度"
     },
     4: {
         "name": "回调vs转换",
-        "must_contain": [
-            "回调/反向运动持续了几根K线？",
-            "回调K线的实体大小：是弱回调还是强反向？",
-            "是否触及或突破了关键结构位？",
-            "原方向方是否有立即的反击？"
+        "dimensions": [
+            {"key": "duration", "label": "回调/反向持续时间", "placeholder": "回调/反向运动持续了几根K线？"},
+            {"key": "strength", "label": "回调K线实体强弱", "placeholder": "回调K线的实体是弱回调的小K线还是强反向的大K线？"},
+            {"key": "structure", "label": "是否触及关键结构位", "placeholder": "是否触及或突破了关键结构位（前高/前低/密集区）？"},
+            {"key": "reply", "label": "原方向方是否反击", "placeholder": "原方向方是否有立即的反击？反击K线特征如何？"}
         ],
+        "must_contain": ["回调/反向持续时间", "回调K线实体强弱", "是否触及关键结构位", "原方向方是否反击"],
         "reject_if_only": ["这是回调", "这是转换"],
-        "placeholder": "请观察以下维度：\n1. 回调/反向运动持续了几根K线？\n2. 回调K线的实体强弱如何？\n3. 是否触及或突破了关键结构位？\n4. 原方向方是否有立即的反击？"
+        "placeholder": "请观察以下维度"
     },
     5: {
         "name": "市场接受",
-        "must_contain": [
-            "突破后价格停留了几根K线？",
-            "是否被立即推回结构内？",
-            "推回后是否继续向突破方向推进？",
-            "突破后的K线实体特征：有无跟进？"
+        "dimensions": [
+            {"key": "stay", "label": "突破后停留时间", "placeholder": "突破后价格停留了几根K线？（1根/2根/3根以上）"},
+            {"key": "reject", "label": "是否被推回", "placeholder": "是否被立即推回结构内？推回的幅度多大？"},
+            {"key": "continuation", "label": "是否继续推进", "placeholder": "推回后是否继续向突破方向推进？"},
+            {"key": "entity_quality", "label": "突破后K线实体特征", "placeholder": "突破后的K线实体特征如何？实体大小、成交量是否放大？"}
         ],
+        "must_contain": ["突破后停留时间", "是否被推回", "是否继续推进", "突破后K线实体特征"],
         "reject_if_only": ["市场接受了", "市场没接受"],
-        "placeholder": "请观察以下维度：\n1. 突破后价格停留了几根K线？\n2. 是否被立即推回结构内？\n3. 推回后是否继续向突破方向推进？\n4. 突破后的K线实体特征如何？"
+        "placeholder": "请观察以下维度"
     }
 }
-# ==================== AI系统提示词模板 ====================
-# 功能：定义AI教练的角色、职责和约束
-# 细节：强调“参考答案”而非“标准答案”，分两轮执行训练流程
+
+# ==================== AI系统提示词模板（V21优化版）====================
 AI_SYSTEM_PROMPT_TEMPLATE = """你是 Al Brooks 价格行为训练教练。
 
 【你的双重职责】
@@ -143,10 +147,12 @@ AI_SYSTEM_PROMPT_TEMPLATE = """你是 Al Brooks 价格行为训练教练。
 
 【核心原则】
 你的判断是"参考答案"，不是"标准答案"。
-价格行为分析没有唯一正确答案，你的作用是：
-- 检查用户是否遗漏了重要维度
-- 提供另一个角度的观察
-- 帮助用户建立系统的观察框架
+
+【Al Brooks 核心解盘心法 - 必须作为你的点评依据】
+1. 80%原则：市场有80%的时间试图突破震荡区间都会遭遇失败并反转；市场同样有80%的时间试图让一个强趋势反转都会失败并变成顺势回调。
+2. 惯性原理（Inertia）：当前的K线行为大概率会延续前几根K线的惯性，直到关键结构位出现破坏性力量（强趋势K线群）。
+3. 观察重叠度：K线之间高度重叠、带有长影线、阴阳交错，代表这是震荡区间（Trading Range），此时多空双方都没有控制权，任何单根K线的突破都不可信。
+4. 顺势思维：在强通道或大趋势中，任何反向运动在第1轮和第2轮尝试中，都必须先视为"回调（Pullback）"而非"反转（Reversal）"。
 
 当前用户正在训练：{skill_name}
 训练阶段：{level_name}
@@ -162,10 +168,15 @@ AI_SYSTEM_PROMPT_TEMPLATE = """你是 Al Brooks 价格行为训练教练。
 
 用户回答必须包含上述 must_contain 中的所有维度。
 如果用户只给出结论性判断（如 {reject_keywords}），视为无效回答。
-你需要提示：请观察具体K线，按照合格回答标准中的维度逐一描述你的观察。
 
-【用户阅读画像 - 了解用户的薄弱点】
+【用户阅读画像 - 了解用户的薄弱点，用于针对性教学】
 {reading_profile_text}
+
+【个性化教学注入 - 必须严格执行】
+请仔细阅读上述【用户阅读画像】。
+- 如果用户历史中【喜欢提前预测】的分数较高，你在本轮提问中，要严厉质疑他是否有事实依据，逼迫他停留在对当下K线实体的客观描述上。
+- 如果用户历史中【忽略背景阅读】的分数较高，在技能2、3的提问中，顺带问一句："你当前观察到的几根K线，处于大周期的什么结构位置？"
+- 如果用户历史中【描述过于笼统】的分数较高，要求他给出具体的K线编号和量化数据（如"第X根K线实体占比XX%"）。
 
 【训练流程 - 严格执行】
 
@@ -181,6 +192,7 @@ AI_SYSTEM_PROMPT_TEMPLATE = """你是 Al Brooks 价格行为训练教练。
 - **绝对禁止**引用任何具体K线编号（如K258、K259）
 - **绝对禁止**描述任何具体K线特征（如"长下影"、"实体78%"、"吞没形态"）
 - **绝对禁止**给出任何趋势判断或方向判断
+- **根据用户画像的薄弱点，针对性提问**
 
 允许的提问方式示例：
 - "你是根据哪几根K线得出这个判断的？"
@@ -191,7 +203,6 @@ AI_SYSTEM_PROMPT_TEMPLATE = """你是 Al Brooks 价格行为训练教练。
 禁止的提问方式示例（泄露答案）：
 - "你注意到K259的长下影了吗？"  ❌
 - "K260的吞没形态说明什么？"  ❌
-- "最近3根K线的实体占比78%，你怎么看？" ❌
 
 如果回答**到位**（覆盖了所有必须维度）：
 - 只说："好的，我明白了"
@@ -202,8 +213,6 @@ AI_SYSTEM_PROMPT_TEMPLATE = """你是 Al Brooks 价格行为训练教练。
 1. 对用户的回答给出简短点评（肯定到位的部分，指出仍可补充的维度）
 2. **亮出你自己的判断**（现在可以引用具体K线编号和结构位，说清楚你的观察依据）
 
-然后结束，不再追问。
-
 【约束】
 - 提示只给一次，第2轮必须亮出自己判断
 - 第1轮绝对禁止引用具体K线特征
@@ -211,10 +220,7 @@ AI_SYSTEM_PROMPT_TEMPLATE = """你是 Al Brooks 价格行为训练教练。
 - 禁止使用禁止词汇列表中的任何词语
 """
 
-
 # ==================== 训练阶段定义 ====================
-# 功能：定义三个训练阶段的名称和描述
-# 细节：阶段1允许模糊判断，阶段2要求细化，阶段3允许结构争议
 TRAIN_LEVEL = {
     1: {"name": "观察阶段", "desc": "允许模糊、整体感觉、通道、节奏、倾向。禁止结构辩论、精确确认、摆动定义。"},
     2: {"name": "行为细化阶段", "desc": "开始细化行为、具体K线、推进连续性。"},
@@ -222,8 +228,6 @@ TRAIN_LEVEL = {
 }
 
 # ==================== AI总结提示词 ====================
-# 功能：训练结束后生成总结，更新用户阅读画像
-# 细节：输出JSON格式，包含观察、强项、弱项、下一步建议和画像更新
 AI_SUMMARY_PROMPT = """你是训练总结分析师。根据训练对话记录，分析用户的阅读习惯和训练进展。
 输出格式（JSON）：
 {
@@ -243,8 +247,6 @@ profile_updates中的数值表示本次训练中该问题的出现次数（0-3�
 要求：每条分析具体，引用训练中的实际表现，不要笼统评价，要有可操作性。"""
 
 # ==================== 数据加载函数 ====================
-# 功能：从新浪财经加载期货K线数据
-# 细节：使用akshare库，支持多种周期（15/30/60分钟、日线）
 def load_data(symbol, period="30"):
     try:
         df = ak.futures_zh_minute_sina(symbol=symbol, period=period)
@@ -254,7 +256,6 @@ def load_data(symbol, period="30"):
     if df is None or len(df) == 0:
         st.error(f"{symbol} 无数据")
         return None
-    # 统一列名格式
     df = df.rename(columns={
         "date": "time", "open": "open", "high": "high",
         "low": "low", "close": "close", "volume": "volume",
@@ -264,29 +265,27 @@ def load_data(symbol, period="30"):
     return df
 
 # ==================== 图表构建函数 ====================
-# 功能：使用Plotly绘制K线图和成交量图
-# 细节：显示最近60根K线，橙色竖线标记当前分析的K线位置
 def build_chart(chart_df, bar):
     end = bar + 1
     start = max(0, end - 60)
     df = chart_df.iloc[start:end].copy().reset_index(drop=True)
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.02, row_heights=[0.8, 0.2])
-    # K线图：阳线红色，阴线青色
+    
     fig.add_trace(go.Candlestick(
         x=df.index, open=df["open"], high=df["high"], low=df["low"], close=df["close"],
         showlegend=False, increasing_line_color="red", decreasing_line_color="cyan",
     ), row=1, col=1)
-    # 成交量柱状图：颜色与K线一致
+    
     colors = ["red" if c >= o else "cyan" for o, c in zip(df["open"], df["close"])]
     fig.add_trace(go.Bar(x=df.index, y=df["volume"], marker_color=colors, showlegend=False, opacity=0.5), row=2, col=1)
-    # 每根K线显示编号
+    
     for idx in range(len(df)):
         row = df.iloc[idx]
         ny = row["low"] if row["close"] >= row["open"] else row["high"]
         fig.add_annotation(x=idx, y=ny, text=str(df.index[idx] + start),
                            showarrow=False, font=dict(size=7, color="#888888"),
                            yshift=-10 if row["close"] >= row["open"] else 10)
-    # 橙色竖线标记当前分析的K线
+    
     fig.add_vline(x=bar-start, line_dash="dash", line_color="orange", line_width=1, opacity=0.6)
     fig.update_layout(xaxis_rangeslider_visible=False, height=400,
                       margin=dict(l=10, r=10, t=5, b=5),
@@ -295,62 +294,40 @@ def build_chart(chart_df, bar):
     fig.update_yaxes(showgrid=True, gridcolor="#f0f0f0")
     return fig
 
-# ==================== 结构位识别函数（新增核心功能）====================
-# 功能：从K线数据中自动识别关键结构位
-# 细节：计算前高、前低、密集成交区，以及当前价格在结构中的位置
+# ==================== 结构位识别函数 ====================
 def identify_structures(all_bars, lookback=40):
-    """
-    识别关键结构位
-    
-    参数:
-        all_bars: 包含K线数据的列表，每个元素有 o,h,l,c 属性
-        lookback: 回看K线数量，默认40根
-    
-    返回:
-        dict: 包含前高、前低、密集成交区等结构信息
-    """
     if len(all_bars) < lookback:
         lookback = len(all_bars)
     
-    # 取最近 lookback 根K线
     recent_bars = all_bars[-lookback:]
-    
-    # 计算前高和前低
     highs = [b["h"] for b in recent_bars]
     lows = [b["l"] for b in recent_bars]
     highest = max(highs)
     lowest = min(lows)
     
-    # 识别多次触及的价位（密集成交区）
-    # 简化算法：将价格区间分成20等份，统计每份出现的次数
     price_range = highest - lowest
     if price_range > 0:
         bucket_size = price_range / 20
         buckets = {}
         for bar in recent_bars:
-            # 取K线中点作为代表价格
             mid = (bar["h"] + bar["l"]) / 2
             bucket_idx = int((mid - lowest) / bucket_size)
             bucket_idx = min(bucket_idx, 19)
             buckets[bucket_idx] = buckets.get(bucket_idx, 0) + 1
         
-        # 找出出现次数最多的3个价格区间
         sorted_buckets = sorted(buckets.items(), key=lambda x: x[1], reverse=True)
         dense_zones = []
         for idx, count in sorted_buckets[:3]:
-            if count >= 3:  # 至少被触及3次
+            if count >= 3:
                 zone_low = lowest + idx * bucket_size
                 zone_high = lowest + (idx + 1) * bucket_size
                 dense_zones.append({"low": zone_low, "high": zone_high, "touches": count})
     else:
         dense_zones = []
     
-    # 识别最近的前高和前低（最近10根K线内的极值）
     recent_10 = all_bars[-10:] if len(all_bars) >= 10 else all_bars
     recent_high = max([b["h"] for b in recent_10])
     recent_low = min([b["l"] for b in recent_10])
-    
-    # 当前价格
     current_close = all_bars[-1]["c"]
     
     return {
@@ -364,12 +341,8 @@ def identify_structures(all_bars, lookback=40):
         "price_position_pct": (current_close - lowest) / price_range * 100 if price_range > 0 else 50,
     }
 
-# ==================== 市场信息生成函数（优化版）====================
-# 功能：将K线数据转换为AI可理解的文本格式，并加入结构位信息
-# 细节：计算每根K线的量化指标（实体比例、收盘位置、影线、成交量等），
-#       同时加入自动识别的结构位信息，让AI能直接看到支撑/阻力
+# ==================== 市场信息生成函数（V21优化版 - 加入Brooks原生术语标签）====================
 def _market_msg(chart_df, bar, skill_name):
-    # 检查缓存
     last = st.session_state.get("_mm_cache", {})
     if last.get("bar") == bar and last.get("skill") == skill_name:
         return last["data"]
@@ -377,7 +350,6 @@ def _market_msg(chart_df, bar, skill_name):
     start = max(0, bar - 40)
     all_bars = []
     
-    # 遍历K线，计算每根的量化指标
     for i in range(start, bar + 1):
         row = chart_df.iloc[i]
         o, h, l, c = float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"])
@@ -386,7 +358,6 @@ def _market_msg(chart_df, bar, skill_name):
         body_ratio = body / total_range if total_range > 0 else 0
         volume = float(row["volume"]) if "volume" in chart_df.columns else 0
         
-        # 收盘位置：在实体中的百分比（0=底部，100=顶部）
         if body > 0:
             if c >= o:
                 close_position = (c - o) / body
@@ -395,7 +366,6 @@ def _market_msg(chart_df, bar, skill_name):
         else:
             close_position = 0.5
         
-        # 上下影线百分比
         if total_range > 0:
             upper_shadow_pct = (h - max(o, c)) / total_range * 100
             lower_shadow_pct = (min(o, c) - l) / total_range * 100
@@ -411,73 +381,93 @@ def _market_msg(chart_df, bar, skill_name):
             "volume": volume, "total_range": total_range
         })
     
-    # 计算近20根K线的平均成交量和平均波幅
     recent_vols = [b["volume"] for b in all_bars[-20:]]
     avg_volume = sum(recent_vols) / len(recent_vols) if recent_vols else 1
     recent_ranges = [b["total_range"] for b in all_bars[-20:]]
     avg_range = sum(recent_ranges) / len(recent_ranges) if recent_ranges else 1
     
-    # ===== 新增：识别结构位 =====
     structures = identify_structures(all_bars, lookback=40)
     
-    # 构建输出文本
     lines = []
     
-    # 第一部分：结构位信息（AI可以直接使用的支撑/阻力）
+    # 第一部分：结构位信息
     lines.append("【关键结构位 - 系统自动识别】")
     lines.append(f"  40根K线区间: {structures['lowest_40']:.0f} ~ {structures['highest_40']:.0f}")
     lines.append(f"  最近10根K线高点: {structures['recent_high_10']:.0f}")
     lines.append(f"  最近10根K线低点: {structures['recent_low_10']:.0f}")
     lines.append(f"  当前价格: {structures['current_price']:.0f}")
-    lines.append(f"  当前在40根区间的位置: {structures['price_position_pct']:.0f}% (0%=最低,100%=最高)")
+    lines.append(f"  当前在40根区间的位置: {structures['price_position_pct']:.0f}%")
     
     if structures["dense_zones"]:
-        lines.append("  密集成交区(价格反复重叠区域):")
-        for i, zone in enumerate(structures["dense_zones"][:2]):  # 最多显示2个
+        lines.append("  密集成交区:")
+        for i, zone in enumerate(structures["dense_zones"][:2]):
             lines.append(f"    区域{i+1}: {zone['low']:.0f}~{zone['high']:.0f} (触及{zone['touches']}次)")
     
-    # 第二部分：K线客观统计量
     lines.append("")
-    lines.append("【K线客观统计量（系统自动计算，供参考）】")
+    lines.append("【K线语义化数据 - Al Brooks术语标签】")
     recent = all_bars[-15:] if len(all_bars) >= 15 else all_bars
     
     for idx, k in enumerate(recent):
         vol_ratio = k["volume"] / avg_volume if avg_volume > 0 else 1
         range_ratio = k["total_range"] / avg_range if avg_range > 0 else 1
         
-        # 计算与前一根K线的重叠比例
+        # ===== V21新增：Al Brooks原生术语定义 =====
+        # 1. 趋势K线 vs 震荡K线
+        if k["body_ratio"] >= 0.50:
+            bar_type = "趋势阳线(TrendBar)" if k["c"] >= k["o"] else "趋势阴线(TrendBar)"
+        else:
+            bar_type = "震荡K线(TradingRange)"
+        
+        # 2. 收盘紧迫度 (Urgency)
+        urgency = "普通"
+        if k["c"] >= k["o"] and k["lower_shadow_pct"] < 10 and k["upper_shadow_pct"] < 10:
+            urgency = "极强多头紧迫(买方完全控制)"
+        elif k["c"] < k["o"] and k["upper_shadow_pct"] < 10 and k["lower_shadow_pct"] < 10:
+            urgency = "极强空头紧迫(卖方完全控制)"
+        elif k["close_position"] >= 0.85:
+            urgency = "收在强高位"
+        elif k["close_position"] <= 0.15:
+            urgency = "收在强低位"
+        
+        # 3. 重叠度计算
         overlap_ratio = 0.0
+        overlap_desc = ""
         if idx > 0:
             prev = recent[idx - 1]
             overlap = min(k["h"], prev["h"]) - max(k["l"], prev["l"])
             if overlap > 0 and k["total_range"] > 0:
                 overlap_ratio = overlap / k["total_range"]
+                if overlap_ratio >= 0.7:
+                    overlap_desc = "高度重叠"
+                elif overlap_ratio >= 0.4:
+                    overlap_desc = "中度重叠"
+                else:
+                    overlap_desc = "低度重叠"
             elif overlap <= 0:
                 gap = min(k["l"], prev["l"]) - max(k["h"], prev["h"])
                 if gap > 0:
                     overlap_ratio = -gap / k["total_range"] if k["total_range"] > 0 else 0
+                    overlap_desc = f"跳空{gap:.1f}点"
         
+        # 组装语义化输出
         lines.append(
-            f"  K{k['i']}: O={k['o']:.0f} H={k['h']:.0f} L={k['l']:.0f} C={k['c']:.0f}"
-            f" | 实体占波幅={k['body_ratio']*100:.0f}%"
-            f" | 收盘在实体位置={k['close_position']*100:.0f}%"
-            f" | 上影线={k['upper_shadow_pct']:.0f}%"
-            f" | 下影线={k['lower_shadow_pct']:.0f}%"
-            f" | 波幅比={range_ratio:.2f}(>1表示放大)"
-            f" | 成交量={k['volume']:.0f}"
-            f" | 量比={vol_ratio:.2f}"
-            f" | 与前根重叠={overlap_ratio:.2f}(负值=跳空)"
+            f"  K{k['i']}: {bar_type} | 紧迫度={urgency} | "
+            f"实体={k['body_ratio']*100:.0f}% | "
+            f"波幅比={range_ratio:.2f} | 量比={vol_ratio:.2f} | "
+            f"重叠={overlap_desc if overlap_desc else f'{overlap_ratio:.0%}'}"
+        )
+        
+        # 附加原始数据供参考
+        lines.append(
+            f"      └─ 详: O={k['o']:.0f} H={k['h']:.0f} L={k['l']:.0f} C={k['c']:.0f} | "
+            f"上影={k['upper_shadow_pct']:.0f}% 下影={k['lower_shadow_pct']:.0f}%"
         )
     
     result = "\n".join(lines)
-    
-    # 缓存结果
     st.session_state["_mm_cache"] = {"bar": bar, "skill": skill_name, "data": result}
     return result
 
 # ==================== AI调用函数 ====================
-# 功能：调用DeepSeek API获取教练回复
-# 细节：使用OpenAI兼容接口，支持自定义base_url和model
 def _gpt(messages):
     api_key = st.secrets.get("OPENAI_API_KEY", "")
     base_url = st.secrets.get("OPENAI_BASE_URL", "https://api.deepseek.com")
@@ -496,8 +486,6 @@ def _gpt(messages):
         return f"【API 错误】{e}"
 
 # ==================== 构建技能约束文本 ====================
-# 功能：将技能约束转换为提示词文本
-# 细节：列出允许的分析维度和禁止的词汇
 def _build_skill_constraints_text(skill_id):
     sk = SKILL_CONSTRAINTS[skill_id]
     std = SKILL_QUALITY_STANDARDS[skill_id]
@@ -519,8 +507,6 @@ def _build_skill_constraints_text(skill_id):
 如果用户只给出结论性判断，必须要求其补充具体观察。"""
 
 # ==================== 构建用户阅读画像文本 ====================
-# 功能：将历史训练中积累的薄弱点转换为提示词文本
-# 细节：让AI了解用户的习惯，针对性训练
 def _build_reading_profile_text():
     rp = st.session_state.get("reading_profile", {})
     if not rp:
@@ -535,8 +521,6 @@ def _build_reading_profile_text():
     return "用户历史训练中暴露的薄弱点（出现次数越多越需要关注）：\n" + "\n".join(items)
 
 # ==================== 教练提问函数 ====================
-# 功能：根据当前技能、阶段和对话历史，生成AI教练的回复
-# 细节：区分第1轮（检查/提示）和第2轮（亮出判断）
 def ask_coach(chart_df, bar, skill_name, skill_id, dialogue, level=1, is_second_round=False):
     lv = TRAIN_LEVEL.get(level, TRAIN_LEVEL[1])
     constraints = _build_skill_constraints_text(skill_id)
@@ -567,8 +551,6 @@ def ask_coach(chart_df, bar, skill_name, skill_id, dialogue, level=1, is_second_
     return _gpt(msgs)
 
 # ==================== 训练总结函数 ====================
-# 功能：训练结束后生成总结，并更新用户画像
-# 细节：调用AI生成JSON格式的总结，然后解析并更新session_state
 def ask_summary(dialogue, observations, skill_id=None):
     if not dialogue and not observations:
         return json.dumps({"observations":["暂无训练数据"], "strong_areas":[], "weak_areas":[], "next_focus":[]})
@@ -587,8 +569,6 @@ def ask_summary(dialogue, observations, skill_id=None):
                   {"role":"user","content":f"【观察】\n{ot}\n\n【对话】\n{dt}\n\n{rp_text}"}])
 
 # ==================== 更新用户画像 ====================
-# 功能：解析AI返回的JSON，更新session_state中的用户画像
-# 细节：累加每次训练中暴露的问题次数
 def update_reading_profile(summary_json):
     try:
         data = json.loads(summary_json)
@@ -615,7 +595,6 @@ SKILLS = [
 # ==================== 数据加载辅助函数 ====================
 @st.cache_data(ttl=3600, show_spinner=False)
 def _fetch_all_contracts():
-    """获取所有合约的主力连续代码"""
     def _fetch_one(ex):
         try:
             result = ak.match_main_contract(symbol=ex)
@@ -634,15 +613,10 @@ def _fetch_all_contracts():
                     mc[code] = c
     return mc
 
-def _load_all_main_contracts(mc):
-    mc.update(_fetch_all_contracts())
-
 def _random_bar(df, min_bar=60):
-    """随机选择一根K线作为起始位置"""
     return random.randint(min_bar, len(df) - 1)
 
 def _do_load(sym_code, sym_main, period="30"):
-    """加载品种数据的核心函数"""
     with st.spinner("加载中..."):
         df = load_data(sym_main, period=period)
         if df is not None:
@@ -664,7 +638,6 @@ def _do_load(sym_code, sym_main, period="30"):
             st.rerun()
 
 def next_bar_callback():
-    """下一根按钮的回调函数"""
     if st.session_state.get("chart_df") is not None:
         df = st.session_state["chart_df"]
         current_bar = st.session_state.get("current_bar", 0)
@@ -674,9 +647,8 @@ def next_bar_callback():
             st.session_state["skill_round"] = 0
             st.session_state["coach_dialogue"] = []
 
-# ==================== 发送用户回答的处理函数 ====================
+# ==================== 发送用户回答的处理函数（V21优化版）====================
 def _send(text, chart_df, bar, skill):
-    """处理用户发送的回答"""
     s = st.session_state
     dlg = s["coach_dialogue"]
     dlg.append({"role": "user", "content": text})
@@ -700,11 +672,57 @@ def _send(text, chart_df, bar, skill):
     s["send_counter"] = s.get("send_counter", 0) + 1
     st.rerun()
 
+# ==================== 结构化输入组件（V21新增核心功能）====================
+def render_structured_input(skill_id, current_round):
+    """
+    根据当前技能，渲染结构化输入表单（分段式填空）
+    """
+    std = SKILL_QUALITY_STANDARDS[skill_id]
+    dimensions = std["dimensions"]
+    
+    st.markdown("---")
+    st.markdown(f"✍️ **请根据以下维度观察图表（第 {current_round+1}/2 轮）：**")
+    st.caption("💡 填写每个维度的观察，系统会自动组合成完整分析发送给教练")
+    
+    # 动态构建表单
+    with st.form(key=f"skill_form_{skill_id}_{current_round}"):
+        user_inputs = {}
+        cols = st.columns(1)
+        
+        for idx, dim in enumerate(dimensions):
+            # 为每个维度生成带说明的输入框
+            label = f"**{idx+1}. {dim['label']}**"
+            placeholder = dim["placeholder"]
+            val = st.text_input(
+                label=label,
+                placeholder=placeholder,
+                key=f"structured_input_{skill_id}_{idx}_{current_round}",
+                label_visibility="visible"
+            )
+            user_inputs[dim["key"]] = val
+        
+        submit_button = st.form_submit_button(label="📤 提交本次观察", use_container_width=True, type="primary")
+        
+        if submit_button:
+            # 检查是否有空格未填
+            empty_fields = [dim["label"] for dim in dimensions if not user_inputs.get(dim["key"], "").strip()]
+            if empty_fields:
+                st.warning(f"⚠️ 请填写以下维度: {', '.join(empty_fields)}")
+                return None
+            else:
+                # 潜移默化：自动拼接成一段逻辑严密的PA分析文本
+                combined_prompt = "我的观察如下：\n"
+                for idx, dim in enumerate(dimensions):
+                    combined_prompt += f"{idx+1}. 【{dim['label']}】: {user_inputs[dim['key']]}\n"
+                return combined_prompt
+    
+    return None
+
 # ==================== 主界面函数 ====================
 def main():
-    st.set_page_config(page_title="Al Brooks 结构训练器", layout="wide")
+    st.set_page_config(page_title="Al Brooks 结构训练器 V21", layout="wide")
     
-    # CSS样式（保持原有样式）
+    # CSS样式
     st.markdown("""
     <style>
      section[data-testid="stSidebar"] { width: 280px !important; min-width: 240px !important; max-width: 320px !important; }
@@ -721,6 +739,9 @@ def main():
      div[data-testid="stInfo"] { padding: 0.3rem !important; font-size: 0.8rem !important; }
      div[data-testid="stSuccess"] { padding: 0.3rem !important; font-size: 0.8rem !important; }
      .stCaption { font-size: 0.75rem !important; }
+     /* 结构化输入框样式 */
+     div[data-testid="stForm"] label { font-size: 0.85rem !important; font-weight: 500 !important; }
+     div[data-testid="stForm"] input { font-size: 0.85rem !important; }
     </style>
     """, unsafe_allow_html=True)
     
@@ -740,6 +761,7 @@ def main():
         "_mm_cache": {},
         "reading_profile": {},
         "data_period": "30",
+        "train_mode": 1,  # 当前技能ID
     }.items():
         if k not in st.session_state:
             st.session_state[k] = v
@@ -748,7 +770,6 @@ def main():
     with st.sidebar:
         st.markdown("**品种选择**")
         
-        # 周期选择
         period_map = {"15分钟": "15", "30分钟": "30", "60分钟": "60", "日线": "day"}
         period_label = st.selectbox(
             "周期",
@@ -759,7 +780,6 @@ def main():
         )
         selected_period = period_map[period_label]
 
-        # 数据源信息
         with st.expander("数据源信息", expanded=False):
             st.caption(
                 f"来源: 新浪财经(akshare)<br>"
@@ -815,6 +835,8 @@ def main():
                     if current < max_bar:
                         st.session_state["current_bar"] = current + 1
                         st.session_state["_mm_cache"] = {}
+                        st.session_state["skill_round"] = 0
+                        st.session_state["coach_dialogue"] = []
                         st.rerun()
                     else:
                         st.toast("已是最后一根K线", icon="ℹ️")
@@ -841,7 +863,12 @@ def main():
                 key="bar_slider", 
                 label_visibility="collapsed"
             )
-            st.session_state["current_bar"] = bar
+            if bar != st.session_state["current_bar"]:
+                st.session_state["current_bar"] = bar
+                st.session_state["_mm_cache"] = {}
+                st.session_state["skill_round"] = 0
+                st.session_state["coach_dialogue"] = []
+                st.rerun()
 
         # 阅读画像显示
         rp = st.session_state.get("reading_profile", {})
@@ -911,26 +938,21 @@ def main():
                 st.markdown(f"**{'🧑 你' if m['role']=='user' else '🤖 教练'}**")
                 st.markdown(m["content"])
 
-       # 用户输入 - 带动态提示的输入框
-s = st.session_state
-can_input = s.get("skill_round", 0) < 2 and s.get("chart_df") is not None
+    # ==================== V21核心优化：结构化输入 ====================
+    s = st.session_state
+    can_input = s.get("skill_round", 0) < 2 and s.get("chart_df") is not None
 
-if can_input:
-    # 获取当前技能的提示文本
-    current_skill_id = s.get("train_mode", 1)
-    current_skill_std = SKILL_QUALITY_STANDARDS[current_skill_id]
-    placeholder_text = current_skill_std["placeholder"]
-    
-    prompt = st.chat_input(placeholder=placeholder_text)
-    
-    if prompt:
-        _send(prompt, df, bar, active_skill)
-else:
-    if s.get("skill_round", 0) >= 2:
-        st.info("本项技能训练结束，点击上方技能按钮切换下一项继续训练。")
-    prompt = None
-
+    if can_input:
+        current_skill_id = s.get("train_mode", 1)
+        
+        # 使用结构化输入表单
+        combined_prompt = render_structured_input(current_skill_id, s["skill_round"])
+        
+        if combined_prompt:
+            _send(combined_prompt, df, active_skill, active_skill)
+    else:
+        if s.get("skill_round", 0) >= 2:
+            st.info("✅ 本项技能训练结束，点击上方技能按钮切换下一项继续训练。")
 
 if __name__ == "__main__":
     main()
-       
